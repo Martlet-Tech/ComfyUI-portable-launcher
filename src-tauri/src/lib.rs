@@ -9,6 +9,7 @@ use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::DialogExt;
 use winreg::enums::HKEY_CURRENT_USER;
 use winreg::RegKey;
+use std::os::windows::process::CommandExt;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ProxyConfig {
@@ -129,6 +130,7 @@ async fn launch_instance(
     let mut cmd = Command::new(python_exe);
     cmd.args(&args);
     cmd.current_dir(&path);
+    cmd.creation_flags(0x08000000);
     cmd.stdout(Stdio::null());
     cmd.stderr(Stdio::null());
     cmd.stdin(Stdio::null());
@@ -217,6 +219,7 @@ async fn run_update(
     let mut cmd = Command::new(&python_exe);
     cmd.args(&args);
     cmd.current_dir(&path);
+    cmd.creation_flags(0x08000000);
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
@@ -272,6 +275,7 @@ async fn run_update(
 
             let mut pip_cmd = Command::new(python_exe);
             pip_cmd.args(&pip_args);
+            pip_cmd.creation_flags(0x08000000);
             pip_cmd.stdout(Stdio::piped());
             pip_cmd.stderr(Stdio::piped());
 
@@ -395,6 +399,7 @@ fn handle_tray_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
                     let cmd = std::process::Command::new(python_exe)
                         .args(&args)
                         .current_dir(&inst.path)
+                        .creation_flags(0x08000000)
                         .stdout(std::process::Stdio::null())
                         .stderr(std::process::Stdio::null())
                         .stdin(std::process::Stdio::null())
