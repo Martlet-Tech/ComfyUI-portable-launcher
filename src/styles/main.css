@@ -1,0 +1,86 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #1a1a2e; color: #e0e0e0; height: 100vh; overflow: hidden; }
+#app { display: flex; flex-direction: column; height: 100vh; }
+
+#topbar { display: flex; align-items: center; justify-content: space-between; padding: 8px 16px; background: #16213e; border-bottom: 1px solid #0f3460; flex-shrink: 0; }
+.topbar-left, .topbar-right { display: flex; align-items: center; gap: 10px; }
+.proxy-toggle { display: flex; align-items: center; gap: 4px; font-size: 13px; color: #a0a0b0; cursor: pointer; }
+.proxy-toggle input { accent-color: #e94560; }
+.proxy-manual { display: flex; align-items: center; gap: 4px; }
+.small-input { background: #0f3460; border: 1px solid #1a3a6a; color: #e0e0e0; padding: 2px 6px; border-radius: 3px; font-size: 12px; width: 100px; }
+.port-input { width: 80px !important; }
+
+.icon-btn { background: #0f3460; border: 1px solid #1a3a6a; color: #e0e0e0; width: 32px; height: 32px; border-radius: 4px; cursor: pointer; font-size: 18px; display: flex; align-items: center; justify-content: center; }
+.icon-btn:hover { background: #1a3a6a; }
+.icon-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+#mainArea { display: flex; flex: 1; overflow: hidden; }
+
+#instanceList { width: 240px; min-width: 240px; background: #16213e; border-right: 1px solid #0f3460; overflow-y: auto; }
+#instanceList .empty-hint { padding: 40px 20px; text-align: center; color: #555; font-size: 14px; }
+
+.instance-item { padding: 12px 16px; border-bottom: 1px solid #0f3460; cursor: pointer; position: relative; overflow: hidden; transition: background 0.2s; }
+.instance-item:hover { background: #1a3a6a; }
+.instance-item.selected { background: #0f3460; border-left: 3px solid #e94560; }
+.instance-item .name { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.instance-item .sub { font-size: 11px; color: #888; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.instance-item.status-stopped { border-left: 3px solid #555; }
+.instance-item.status-running { border-left: 3px solid #2ecc71; }
+.instance-item.status-starting { border-left: 3px solid #f39c12; }
+
+@keyframes stripe-scroll { 0% { background-position: 0 0; } 100% { background-position: 40px 0; } }
+.instance-item.status-starting::after {
+  content: ''; position: absolute; inset: 0;
+  background: repeating-linear-gradient(-45deg, transparent, transparent 8px, rgba(255,255,0,0.15) 8px, rgba(0,0,0,0.2) 16px);
+  background-size: 40px 40px;
+  animation: stripe-scroll 0.6s linear infinite;
+  pointer-events: none;
+}
+.instance-item.status-starting .stripe-overlay { display: block; }
+.instance-item .stripe-overlay { display: none; }
+
+#instanceDetail { flex: 1; padding: 20px 24px; overflow-y: auto; }
+#instanceDetail.hidden { display: none; }
+
+.detail-row { margin-bottom: 16px; display: flex; align-items: center; gap: 12px; }
+#instanceAlias { background: #0f3460; border: 1px solid #1a3a6a; color: #e0e0e0; padding: 8px 12px; border-radius: 4px; font-size: 14px; flex: 1; }
+.path-label { font-size: 12px; color: #888; max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.detail-section { margin-bottom: 16px; }
+.section-title { font-size: 12px; color: #888; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+.btn-group { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.launch-btn, .update-btn { padding: 8px 16px; border-radius: 4px; font-size: 13px; cursor: pointer; transition: all 0.2s; }
+.launch-btn { background: #0f3460; border: 1px solid #1a3a6a; color: #e0e0e0; }
+.launch-btn:hover { background: #1a3a6a; }
+.launch-btn.primary { background: #e94560; border-color: #e94560; color: #fff; }
+.launch-btn.primary:hover { background: #d63851; }
+.launch-btn:disabled, .update-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.stop-btn { padding: 8px 16px; border-radius: 4px; font-size: 13px; cursor: pointer; background: #c0392b; border: 1px solid #c0392b; color: #fff; }
+.stop-btn:hover { background: #a93226; }
+.hidden { display: none !important; }
+.update-btn { background: #0f3460; border: 1px solid #1a3a6a; color: #e0e0e0; }
+.update-btn:hover { background: #1a3a6a; }
+
+.path-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.path-row .path-title { font-size: 13px; min-width: 120px; color: #a0a0b0; }
+.path-row input { flex: 1; background: #0f3460; border: 1px solid #1a3a6a; color: #e0e0e0; padding: 6px 10px; border-radius: 4px; font-size: 13px; }
+.path-row input.path-error { border-color: #e74c3c; background: #2a1a1a; }
+.path-row .folder-btn { background: #0f3460; border: 1px solid #1a3a6a; color: #e0e0e0; padding: 6px 10px; border-radius: 4px; cursor: pointer; font-size: 13px; }
+.path-row .folder-btn:hover { background: #1a3a6a; }
+
+.modal { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; }
+.modal.hidden { display: none; }
+.modal-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.6); }
+.modal-body { position: relative; background: #16213e; border: 1px solid #0f3460; border-radius: 8px; min-width: 400px; max-width: 600px; max-height: 80vh; }
+.modal-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid #0f3460; font-size: 15px; }
+.modal-content { padding: 16px; overflow-y: auto; max-height: 60vh; }
+.log-modal .modal-body { min-width: 500px; }
+.conflict-modal .modal-body { min-width: 350px; }
+#logContent { background: #0d1b2a; padding: 12px; border-radius: 4px; font-family: 'Cascadia Code', 'Fira Code', monospace; font-size: 12px; white-space: pre-wrap; max-height: 400px; overflow-y: auto; color: #a0b0c0; }
+
+.settings-section { margin-bottom: 20px; }
+.settings-section .section-title { margin-bottom: 12px; }
+.settings-section .proxy-toggle { margin-bottom: 8px; }
+
+button:focus-visible { outline: 2px solid #e94560; outline-offset: 2px; }
