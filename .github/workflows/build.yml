@@ -1,0 +1,30 @@
+name: Build and Release
+on:
+  push:
+    tags: ['v*']
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install frontend deps
+        run: npm install
+      - name: Build frontend
+        run: npm run build
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Build Tauri app
+        run: npx tauri build
+      - name: Pack zip
+        shell: pwsh
+        run: |
+          $ver = (Select-Xml -Path Cargo.toml -XPath '//version').Node.InnerText
+          $exeName = "ComfyUI-portable-launcher.exe"
+          Compress-Archive -Path "src-tauri\target\release\$exeName" -DestinationPath "v$ver.zip"
+      - name: GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: v*.zip

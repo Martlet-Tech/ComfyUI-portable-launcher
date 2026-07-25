@@ -1,8 +1,8 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicegui/nicegui/main/nicegui/static/tauri/tauri.conf.json",
-  "productName": "ComfyUI Flauncher",
+  "productName": "ComfyUI-portable-launcher",
   "version": "0.1.0",
-  "identifier": "com.comfyui.flauncher",
+  "identifier": "com.comfyui.portable-launcher",
   "build": {
     "beforeDevCommand": "npm run dev",
     "frontendDist": "../dist",
@@ -11,7 +11,7 @@
   "app": {
     "windows": [
       {
-        "title": "ComfyUI Flauncher",
+        "title": "ComfyUI-portable-launcher",
         "width": 900,
         "height": 650,
         "resizable": true,
@@ -24,7 +24,6 @@
   },
   "bundle": {
     "active": true,
-    "targets": "msi",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
