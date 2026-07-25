@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::io::{Cursor, Read};
+use std::io::Read;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use tauri::menu::{Menu, MenuBuilder, MenuItemBuilder};
@@ -9,16 +9,6 @@ use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::DialogExt;
 use winreg::enums::HKEY_CURRENT_USER;
 use winreg::RegKey;
-
-fn load_tray_icon() -> tauri::image::Image<'static> {
-    let bytes = include_bytes!("../icons/tray.png");
-    let decoder = png::Decoder::new(Cursor::new(bytes));
-    let mut reader = decoder.read_info().unwrap();
-    let mut rgba = vec![0u8; reader.info().raw_bytes()];
-    reader.next_frame(&mut rgba).unwrap();
-    let (w, h) = reader.info().size();
-    tauri::image::Image::new_owned(rgba, w, h)
-}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ProxyConfig {
@@ -432,9 +422,11 @@ pub fn run() {
                 proxy: None,
             };
             let menu = build_tray_menu(app.handle(), &empty)?;
-            let tray = TrayIconBuilder::new()
-                .icon(load_tray_icon())
-                .menu(&menu)
+            let mut tray = TrayIconBuilder::new().menu(&menu);
+            if let Some(icon) = app.default_window_icon().cloned() {
+                tray = tray.icon(icon);
+            }
+            let tray = tray
                 .on_menu_event(handle_tray_event)
                 .on_tray_icon_event(|tray, event| {
                     if let TrayIconEvent::Click {
