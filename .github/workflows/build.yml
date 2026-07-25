@@ -21,7 +21,7 @@ jobs:
       - name: Pack zip
         shell: pwsh
         run: |
-          $ver = (Select-Xml -Path Cargo.toml -XPath '//version').Node.InnerText
+          $ver = (Select-Xml -Path src-tauri/Cargo.toml -XPath '//version').Node.InnerText
           $exeName = "ComfyUI-portable-launcher.exe"
           Compress-Archive -Path "src-tauri\target\release\$exeName" -DestinationPath "v$ver.zip"
       - name: GitHub Release
