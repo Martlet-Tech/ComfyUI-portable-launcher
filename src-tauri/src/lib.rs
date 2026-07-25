@@ -128,6 +128,7 @@ async fn launch_instance(
 
     let mut cmd = Command::new(python_exe);
     cmd.args(&args);
+    cmd.current_dir(&path);
     cmd.stdout(Stdio::null());
     cmd.stderr(Stdio::null());
     cmd.stdin(Stdio::null());
@@ -215,6 +216,7 @@ async fn run_update(
 
     let mut cmd = Command::new(&python_exe);
     cmd.args(&args);
+    cmd.current_dir(&path);
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
@@ -392,6 +394,7 @@ fn handle_tray_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
                     ];
                     let cmd = std::process::Command::new(python_exe)
                         .args(&args)
+                        .current_dir(&inst.path)
                         .stdout(std::process::Stdio::null())
                         .stderr(std::process::Stdio::null())
                         .stdin(std::process::Stdio::null())
