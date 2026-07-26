@@ -28,16 +28,22 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .instance-item.status-running { border-left: 3px solid #2ecc71; }
 .instance-item.status-starting { border-left: 3px solid #f39c12; }
 
-@keyframes stripe-scroll { 0% { background-position: 0 0; } 100% { background-position: 40px 0; } }
-.instance-item.status-starting::after {
-  content: ''; position: absolute; inset: 0;
-  background: repeating-linear-gradient(-45deg, transparent, transparent 8px, rgba(255,255,0,0.15) 8px, rgba(0,0,0,0.2) 16px);
-  background-size: 40px 40px;
-  animation: stripe-scroll 0.6s linear infinite;
-  pointer-events: none;
+@keyframes stripe-scroll {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-22.627px); }
 }
-.instance-item.status-starting .stripe-overlay { display: block; }
-.instance-item .stripe-overlay { display: none; }
+.instance-item.status-starting::after {
+  content: ''; position: absolute; inset: 0; width: 300%;
+  background: repeating-linear-gradient(
+    -45deg,
+    rgba(255,255,0,0.12) 0,
+    rgba(255,255,0,0.12) 8px,
+    rgba(0,0,0,0.18) 8px,
+    rgba(0,0,0,0.18) 16px
+  );
+  animation: stripe-scroll 0.6s linear infinite;
+  pointer-events: none; z-index: 1;
+}
 
 #instanceDetail { flex: 1; padding: 20px 24px; overflow-y: auto; }
 #instanceDetail.hidden { display: none; }
@@ -86,7 +92,47 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 
 button:focus-visible { outline: 2px solid #e94560; outline-offset: 2px; }
 
-#customArgs { width: 100%; background: #0f3460; border: 1px solid #1a3a6a; color: #e0e0e0; padding: 8px 12px; border-radius: 4px; font-size: 13px; font-family: 'Cascadia Code', 'Fira Code', monospace; }
+#customArgs, #instancePort { background: #0f3460; border: 1px solid #1a3a6a; color: #e0e0e0; padding: 8px 12px; border-radius: 4px; font-size: 13px; font-family: 'Cascadia Code', 'Fira Code', monospace; }
+#customArgs { width: 100%; }
+#instancePort { width: 100px; }
+.args-preview { background: #0d1b2a; padding: 10px; border-radius: 4px; font-family: 'Cascadia Code', 'Fira Code', monospace; font-size: 11px; white-space: pre-wrap; word-break: break-all; color: #a0b0c0; line-height: 1.5; margin-top: 6px; max-height: none; }
+
+.help-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; border-radius: 50%;
+  background: #1a3a6a; color: #8899aa; border: 1px solid #2a4a7a;
+  font-size: 13px; font-weight: 700; cursor: pointer;
+  margin-left: 8px; vertical-align: middle; line-height: 1;
+  transition: background 0.15s, color 0.15s;
+}
+.help-btn:hover { background: #e94560; color: #fff; border-color: #e94560; }
+.help-btn:active { transform: scale(0.92); }
+
+.help-tooltip {
+  position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  z-index: 1000;
+  width: min(680px, 90vw); max-height: 70vh;
+  background: #0f1a2e; border: 1px solid #2a4a7a; border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+  display: flex; flex-direction: column;
+}
+.help-tooltip-header {
+  padding: 10px 14px; font-size: 12px; font-weight: 600;
+  color: #8899aa; border-bottom: 1px solid #1a2a4a;
+  user-select: none; flex-shrink: 0;
+}
+.help-content {
+  padding: 12px 14px; margin: 0; overflow-y: auto;
+  font-family: 'Cascadia Code', 'Fira Code', monospace;
+  font-size: 11px; line-height: 1.55; white-space: pre-wrap; word-break: break-all;
+  color: #a0b0c0; background: transparent;
+  flex: 1; min-height: 0;
+}
+.help-tooltip-footer {
+  padding: 8px 14px; font-size: 11px; color: #556;
+  border-top: 1px solid #1a2a4a; text-align: center; flex-shrink: 0;
+  user-select: none;
+}
 
 #startupLogContent {
   background: #0d1b2a;
@@ -102,3 +148,18 @@ button:focus-visible { outline: 2px solid #e94560; outline-offset: 2px; }
   line-height: 1.5;
   margin-top: 4px;
 }
+
+#statusBar {
+  position: fixed; bottom: 0; left: 0; right: 0; z-index: 900;
+  height: 26px; display: flex; align-items: center; justify-content: space-between;
+  padding: 0 14px;
+  background: #0d1a2e; border-top: 1px solid #1a2a4a;
+  font-family: 'Cascadia Code', 'Fira Code', monospace;
+  font-size: 11px; color: #5a6a7a;
+  user-select: none;
+}
+#statusLeft { flex: 0 0 auto; min-width: 60px; }
+#statusCenter { flex: 1; text-align: center; }
+#statusRight { flex: 0 0 auto; text-align: right; min-width: 40px; }
+
+body { padding-bottom: 26px; }

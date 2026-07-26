@@ -42,6 +42,15 @@ const instanceService = {
   async openInExplorer(path) {
     await invoke('open_in_explorer', { path });
   },
+  async getComfyuiHelp(path) {
+    return await invoke('get_comfyui_help', { path });
+  },
+  async getStatusSnapshot(params) {
+    return await invoke('get_status_snapshot', params);
+  },
+  async getGitHash(params) {
+    return await invoke('get_git_hash', params);
+  },
 };
 
 function createTopbar(handlers) {
@@ -73,11 +82,6 @@ function createInstanceList(container, handlers) {
       if (inst.id === selectedId) div.classList.add('selected');
       const name = inst.alias || inst.path.split('\\').pop() || inst.path;
       div.innerHTML = `<div class="name">${escapeHtml(name)}</div><div class="sub">${escapeHtml(inst.path)}</div>`;
-      if (st.status === 'starting') {
-        const overlay = document.createElement('div');
-        overlay.className = 'stripe-overlay';
-        div.appendChild(overlay);
-      }
       div.addEventListener('click', () => handlers.onSelect(inst.id));
       container.appendChild(div);
     }
@@ -97,6 +101,7 @@ function createInstanceDetail(container, handlers) {
   const pathLabel = document.getElementById('instancePath');
   const portInput = document.getElementById('instancePort');
   const customArgsInput = document.getElementById('customArgs');
+  const argsPreview = document.getElementById('argsPreview');
   const pathRows = document.getElementById('pathRows');
   const launchBtns = container.querySelectorAll('.launch-btn');
   const stopBtn = container.querySelector('.stop-btn');
@@ -129,39 +134,102 @@ function createInstanceDetail(container, handlers) {
     if (currentInstance) handlers.onAliasChange(currentInstance.id, aliasInput.value);
   });
   portInput.addEventListener('change', () => {
-    if (currentInstance) handlers.onPortChange(currentInstance.id, parseInt(portInput.value) || 8188);
+    if (currentInstance) {
+      handlers.onPortChange(currentInstance.id, parseInt(portInput.value) || 8188);
+      updateArgsPreview(currentInstance);
+    }
   });
   customArgsInput.addEventListener('change', () => {
-    if (currentInstance) handlers.onCustomArgsChange(currentInstance.id, customArgsInput.value);
+    if (currentInstance) {
+      handlers.onCustomArgsChange(currentInstance.id, customArgsInput.value);
+      currentInstance.custom_args = customArgsInput.value || null;
+      updateArgsPreview(currentInstance);
+    }
+  });
+
+  const helpBtn = document.getElementById('helpBtn');
+  const helpTooltip = document.getElementById('helpTooltip');
+  const helpContent = document.getElementById('helpContent');
+  let helpLoading = false;
+  helpBtn.addEventListener('click', async () => {
+    if (helpLoading) return;
+    if (!helpTooltip.classList.contains('hidden')) {
+      helpTooltip.classList.add('hidden');
+      return;
+    }
+    helpContent.textContent = '加载中...';
+    helpTooltip.classList.remove('hidden');
+    helpLoading = true;
+    try {
+      const text = await instanceService.getComfyuiHelp(currentInstance.path);
+      helpContent.textContent = text;
+    } catch (e) {
+      helpContent.textContent = '获取参数列表失败: ' + e;
+    } finally {
+      helpLoading = false;
+    }
+  });
+  document.addEventListener('click', (e) => {
+    if (!helpTooltip.classList.contains('hidden') && !helpTooltip.contains(e.target) && e.target !== helpBtn) {
+      helpTooltip.classList.add('hidden');
+    }
   });
 
   function render(instance, instanceStates) {
+    helpTooltip.classList.add('hidden');
     currentInstance = instance;
     container.classList.remove('hidden');
     pathLabel.textContent = instance.path;
     aliasInput.value = instance.alias || '';
     portInput.value = instance.port || 8188;
     customArgsInput.value = instance.custom_args || '';
+    updateArgsPreview(instance);
 
     const st = instanceStates[instance.id] || { status: 'stopped' };
     const isRunning = st.status === 'running';
     const isStarting = st.status === 'starting';
+    const isUpdating = st.updating === true;
     launchBtns.forEach(b => b.classList.toggle('hidden', isRunning || isStarting));
     stopBtn.classList.toggle('hidden', !isRunning);
     launchBtns.forEach(b => b.disabled = isStarting);
-    updateBtns.forEach(b => b.disabled = isStarting || isRunning);
+    updateBtns.forEach(b => b.disabled = isStarting || isRunning || isUpdating);
     renderPathRows(instance);
 
     const logSection = document.getElementById('startupLogSection');
     const logContent = document.getElementById('startupLogContent');
     const log = st.log || '';
-    if (log || isStarting) {
+    if (log || isStarting || isUpdating) {
       logSection.classList.remove('hidden');
       logContent.textContent = log;
-      logContent.scrollTop = logContent.scrollHeight;
+      if (!isUpdating) logContent.scrollTop = logContent.scrollHeight;
     } else {
       logSection.classList.add('hidden');
     }
+  }
+
+  function buildArgsPreview(inst) {
+    const mainPy = inst.path + '\\ComfyUI\\main.py';
+    const parts = ['-s', mainPy, '--windows-standalone-build', '--port', String(inst.port || 8188)];
+    const dirs = [
+      ['--output-directory', inst.output_directory],
+      ['--input-directory', inst.input_directory],
+      ['--temp-directory', inst.temp_directory],
+      ['--user-directory', inst.user_directory],
+    ];
+    for (const [flag, val] of dirs) {
+      if (val && val.trim()) { parts.push(flag, val.trim()); }
+    }
+    if (inst.custom_args) {
+      for (const arg of inst.custom_args.split(/\s+/)) {
+        if (arg) parts.push(arg);
+      }
+    }
+    return parts.join(' ');
+  }
+
+  function updateArgsPreview(instance) {
+    if (!instance) { argsPreview.textContent = ''; return; }
+    argsPreview.textContent = buildArgsPreview(instance);
   }
 
   function renderPathRows(instance) {
@@ -182,6 +250,7 @@ function createInstanceDetail(container, handlers) {
     pathInputs['instance_path'] = instInput;
     instInput.addEventListener('change', () => {
       handlers.onInstancePathChange(instance.id, instInput.value);
+      updateArgsPreview(instance);
     });
     instFolderBtn.addEventListener('click', () => {
       handlers.onSelectFolder(instance.id, 'instance_path');
@@ -211,6 +280,7 @@ function createInstanceDetail(container, handlers) {
       pathInputs[def.key] = input;
       input.addEventListener('change', () => {
         handlers.onPathChange(instance.id, def.key, input.value);
+        updateArgsPreview(instance);
       });
       folderBtn.addEventListener('click', () => {
         handlers.onSelectFolder(instance.id, def.key);
@@ -326,6 +396,9 @@ const state = {
   instanceStates: {},
   proxy: null,
   isMinimized: false,
+  launchStartTime: null,
+  accumulatedMs: 0,
+  versionCache: {},
 };
 
 const listEl = document.getElementById('instanceList');
@@ -364,6 +437,10 @@ async function init() {
   }
   renderAll();
   validateAllPaths();
+  if (state.selectedId) {
+    const inst = state.config.instances.find(i => i.id === state.selectedId);
+    if (inst) loadVersion(state.selectedId, inst.path);
+  }
   const configPath = await configService.getConfigPath();
   document.getElementById('configPathDisplay').textContent = configPath;
 
@@ -380,6 +457,23 @@ async function init() {
       }
     }
   });
+
+  await listen('update-log', (event) => {
+    const { instance_id, line } = event.payload;
+    const st = state.instanceStates[instance_id];
+    if (!st) return;
+    st.log = (st.log || '') + line + '\n';
+    if (instance_id === state.selectedId) {
+      const el = document.getElementById('startupLogContent');
+      if (el) {
+        el.textContent = st.log;
+        el.scrollTop = el.scrollHeight;
+      }
+    }
+  });
+
+  setInterval(updateStatusBar, 1000);
+  setInterval(pollStatusSnapshot, 1000);
 }
 
 function renderAll() {
@@ -457,11 +551,15 @@ function handleSelect(id) {
   state.selectedId = id;
   renderAll();
   validatePathsForInstance(id);
+  document.getElementById('statusRight').textContent = '...';
+  const inst = state.config.instances.find(i => i.id === id);
+  if (inst) loadVersion(id, inst.path);
 }
 
 async function handleLaunch(id, mode) {
   const inst = state.config.instances.find(i => i.id === id);
   if (!inst) return;
+  state.launchStartTime = state.launchStartTime || Date.now();
   const port = inst.port || 8188;
   const conflict = await checkPortConflict(id, port);
   if (conflict) {
@@ -528,6 +626,10 @@ async function pollPort(id, port) {
 async function handleStop(id) {
   const st = state.instanceStates[id];
   if (!st || !st.pid) return;
+  if (state.launchStartTime !== null) {
+    state.accumulatedMs += Date.now() - state.launchStartTime;
+    state.launchStartTime = null;
+  }
   try { await instanceService.stopInstance(st.pid); } catch (_) {}
   state.instanceStates[id] = { ...st, status: 'stopped', pid: null };
   renderAll();
@@ -536,16 +638,23 @@ async function handleStop(id) {
 async function handleUpdate(id, type) {
   const inst = state.config.instances.find(i => i.id === id);
   if (!inst) return;
+  const st = state.instanceStates[id] || (state.instanceStates[id] = { status: 'stopped' });
+  st.updating = true;
+  st.log = '';
+  renderAll();
   try {
-    const output = await instanceService.runUpdate({
+    await instanceService.runUpdate({
+      instanceId: id,
       path: inst.path,
       updateType: type,
       proxy: state.proxy.enabled ? state.proxy : null,
     });
-    const logText = typeof output === 'string' ? output : JSON.stringify(output);
-    if (logText && logText.trim()) logModal.open(logText);
+    st.log = (st.log || '') + '✓ 更新完成\n';
   } catch (err) {
-    logModal.open(typeof err === 'string' ? err : JSON.stringify(err));
+    st.log = (st.log || '') + '✗ 更新失败: ' + (typeof err === 'string' ? err : JSON.stringify(err)) + '\n';
+  } finally {
+    st.updating = false;
+    renderAll();
   }
 }
 
@@ -656,6 +765,72 @@ async function minimizeApp() {
   if (state.isMinimized) return;
   state.isMinimized = true;
   try { await getCurrentWindow().minimize(); } catch (_) {}
+}
+
+async function loadVersion(id, path) {
+  const el = document.getElementById('statusRight');
+  if (state.versionCache[id]) {
+    el.textContent = state.versionCache[id];
+    return;
+  }
+  el.textContent = '...';
+  try {
+    const hash = await instanceService.getGitHash({ path });
+    if (hash) {
+      state.versionCache[id] = 'v' + hash;
+      el.textContent = 'v' + hash;
+    } else {
+      el.textContent = '--';
+    }
+  } catch (_) {
+    el.textContent = '--';
+  }
+}
+
+function updateStatusBar() {
+  const leftEl = document.getElementById('statusLeft');
+  let displayMs = state.accumulatedMs;
+  if (state.launchStartTime !== null) {
+    displayMs += Date.now() - state.launchStartTime;
+  }
+  if (displayMs > 0) {
+    const secs = Math.floor(displayMs / 1000);
+    const mins = Math.floor(secs / 60);
+    const hrs = Math.floor(mins / 60);
+    if (hrs > 0) {
+      leftEl.textContent = `${hrs}h${mins % 60}m`;
+    } else if (mins > 0) {
+      leftEl.textContent = `${mins}m${secs % 60}s`;
+    } else {
+      leftEl.textContent = `${secs}s`;
+    }
+  } else {
+    leftEl.textContent = '--';
+  }
+}
+
+async function pollStatusSnapshot() {
+  const centerEl = document.getElementById('statusCenter');
+  if (!state.selectedId) {
+    centerEl.textContent = 'Mem --  VRAM --';
+    return;
+  }
+  const st = state.instanceStates[state.selectedId];
+  if (!st || st.status !== 'running' || !st.pid) {
+    centerEl.textContent = 'Mem --  VRAM --';
+    return;
+  }
+  const inst = state.config.instances.find(i => i.id === state.selectedId);
+  if (!inst) return;
+  try {
+    const snap = await instanceService.getStatusSnapshot({ pid: st.pid, path: inst.path });
+    const processMem = snap.process_ram_mb != null ? snap.process_ram_mb + 'M' : '--';
+    const totalMem = snap.total_ram_mb > 0 ? (snap.total_ram_mb / 1024).toFixed(0) + 'G' : '--';
+    const gpuUsed = snap.gpu_used_mb > 0 ? (snap.gpu_used_mb / 1024).toFixed(1) + 'G' : '--';
+    const gpuTotal = snap.gpu_total_mb > 0 ? (snap.gpu_total_mb / 1024).toFixed(0) + 'G' : '--';
+    centerEl.textContent = `Mem ${processMem}/${totalMem}  VRAM ${gpuUsed}/${gpuTotal}`;
+  } catch (_) {
+  }
 }
 
 function sleep(ms) {

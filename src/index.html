@@ -59,12 +59,21 @@
         </div>
 
         <div class="detail-section">
-          <div class="section-title">自定义参数</div>
+          <div class="section-title">
+            自定义参数
+            <button class="help-btn" id="helpBtn" title="查看所有可用参数">?</button>
+          </div>
           <input type="text" id="customArgs" placeholder="--force-fp16 --highvram" />
+          <pre id="argsPreview" class="args-preview"></pre>
+          <div id="helpTooltip" class="help-tooltip hidden">
+            <div class="help-tooltip-header">ComfyUI 参数列表</div>
+            <pre id="helpContent" class="help-content"></pre>
+            <div class="help-tooltip-footer">点击任意位置关闭</div>
+          </div>
         </div>
 
         <div id="startupLogSection" class="detail-section hidden">
-          <div class="section-title">启动日志</div>
+          <div class="section-title">运行日志</div>
           <pre id="startupLogContent"></pre>
         </div>
       </div>
@@ -123,6 +132,12 @@
         <p id="portConflictMsg"></p>
       </div>
     </div>
+  </div>
+
+  <div id="statusBar">
+    <span id="statusLeft">--</span>
+    <span id="statusCenter">Mem --  VRAM --</span>
+    <span id="statusRight">--</span>
   </div>
 
   <script type="module" src="js/app.js"></script>

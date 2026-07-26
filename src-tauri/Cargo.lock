@@ -340,6 +340,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
+ "windows",
  "winreg 0.52.0",
 ]
 
