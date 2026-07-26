@@ -25,7 +25,7 @@ jobs:
         run: |
           $ver = (Get-Content src-tauri/Cargo.toml | Select-String '^version = "(.+)"$').Matches.Groups[1].Value
           $exeName = "ComfyUI-portable-launcher.exe"
-          Compress-Archive -Path "src-tauri\target\release\$exeName" -DestinationPath "v$ver.zip"
+          Compress-Archive -Path "src-tauri\target\release\$exeName" -DestinationPath "ComfyUI-portable-launcher-v$ver.zip"
       - name: GitHub Release
         uses: softprops/action-gh-release@v2
         with:
