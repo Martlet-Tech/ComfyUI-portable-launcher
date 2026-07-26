@@ -1,11 +1,11 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::io::Read;
+use std::io::{BufRead, Read};
 use std::process::{Child, Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tauri::menu::{Menu, MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, TrayIcon, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
 use winreg::enums::HKEY_CURRENT_USER;
 use winreg::RegKey;
@@ -28,6 +28,7 @@ pub struct InstanceConfig {
     pub input_directory: Option<String>,
     pub temp_directory: Option<String>,
     pub user_directory: Option<String>,
+    pub custom_args: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -36,7 +37,19 @@ pub struct AppConfig {
     pub proxy: Option<ProxyConfig>,
 }
 
-pub struct ProcessState(pub Mutex<HashMap<String, Child>>);
+pub(crate) struct ProcessInfo {
+    child: Child,
+    log: Arc<Mutex<String>>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct InstanceLogPayload {
+    instance_id: String,
+    pid: u32,
+    line: String,
+}
+
+pub(crate) struct ProcessState(pub(crate) Mutex<HashMap<String, ProcessInfo>>);
 pub struct TrayHolder(pub Mutex<Option<TrayIcon>>);
 
 fn config_dir() -> std::path::PathBuf {
@@ -79,9 +92,11 @@ fn select_folder(app: AppHandle) -> Result<Option<String>, String> {
 #[tauri::command]
 async fn launch_instance(
     app: AppHandle,
+    instance_id: String,
     path: String,
     mode: String,
     port: u16,
+    custom_args: Option<String>,
     output_directory: Option<String>,
     input_directory: Option<String>,
     temp_directory: Option<String>,
@@ -127,12 +142,18 @@ async fn launch_instance(
         }
     }
 
+    if let Some(ref custom) = custom_args {
+        for arg in custom.split_whitespace() {
+            args.push(arg.to_string());
+        }
+    }
+
     let mut cmd = Command::new(python_exe);
     cmd.args(&args);
     cmd.current_dir(&path);
     cmd.creation_flags(0x08000000);
-    cmd.stdout(Stdio::null());
-    cmd.stderr(Stdio::null());
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
     cmd.stdin(Stdio::null());
 
     if let Some(ref p) = proxy {
@@ -145,12 +166,49 @@ async fn launch_instance(
         }
     }
 
-    let child = cmd.spawn().map_err(|e| format!("Failed to launch: {}", e))?;
+    let mut child = cmd.spawn().map_err(|e| format!("Failed to launch: {}", e))?;
     let pid = child.id();
+    let log = Arc::new(Mutex::new(String::new()));
+
+    if let Some(stdout) = child.stdout.take() {
+        let app_clone = app.clone();
+        let log_clone = log.clone();
+        let iid = instance_id.clone();
+        std::thread::spawn(move || {
+            let reader = std::io::BufReader::new(stdout);
+            for line in reader.lines().map_while(Result::ok) {
+                log_clone.lock().unwrap().push_str(&line);
+                log_clone.lock().unwrap().push_str("\n");
+                let _ = app_clone.emit("instance-log", InstanceLogPayload {
+                    instance_id: iid.clone(),
+                    pid,
+                    line,
+                });
+            }
+        });
+    }
+
+    if let Some(stderr) = child.stderr.take() {
+        let app_clone = app.clone();
+        let log_clone = log.clone();
+        let iid = instance_id;
+        std::thread::spawn(move || {
+            let reader = std::io::BufReader::new(stderr);
+            for line in reader.lines().map_while(Result::ok) {
+                log_clone.lock().unwrap().push_str(&line);
+                log_clone.lock().unwrap().push_str("\n");
+                let _ = app_clone.emit("instance-log", InstanceLogPayload {
+                    instance_id: iid.clone(),
+                    pid,
+                    line,
+                });
+            }
+        });
+    }
 
     let state = app.state::<ProcessState>();
     let mut map = state.0.lock().map_err(|e| e.to_string())?;
-    map.insert(pid.to_string(), child);
+    map.insert(pid.to_string(), ProcessInfo { child, log });
 
     Ok(pid)
 }
@@ -160,9 +218,9 @@ async fn stop_instance(app: AppHandle, pid: u32) -> Result<(), String> {
     let state = app.state::<ProcessState>();
     let mut map = state.0.lock().map_err(|e| e.to_string())?;
 
-    if let Some(mut child) = map.remove(&pid.to_string()) {
-        child.kill().map_err(|e| e.to_string())?;
-        child.wait().ok();
+    if let Some(mut info) = map.remove(&pid.to_string()) {
+        info.child.kill().map_err(|e| e.to_string())?;
+        info.child.wait().ok();
         Ok(())
     } else {
         Err("Process not found".to_string())
@@ -187,6 +245,17 @@ async fn check_paths(paths: Vec<String>) -> Result<Vec<bool>, String> {
         .iter()
         .map(|p| std::path::Path::new(p).exists())
         .collect())
+}
+
+#[tauri::command]
+fn read_instance_log(app: AppHandle, pid: u32) -> Result<String, String> {
+    let state = app.state::<ProcessState>();
+    let map = state.0.lock().map_err(|e| e.to_string())?;
+    if let Some(info) = map.get(&pid.to_string()) {
+        Ok(info.log.lock().unwrap().clone())
+    } else {
+        Ok(String::new())
+    }
 }
 
 #[tauri::command]
@@ -344,6 +413,15 @@ fn get_config_path() -> Result<String, String> {
 }
 
 #[tauri::command]
+fn open_in_explorer(path: String) -> Result<(), String> {
+    std::process::Command::new("explorer")
+        .arg(&path)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 fn rebuild_tray_menu(app: AppHandle) -> Result<(), String> {
     let config = read_config()?;
     let menu = build_tray_menu(&app, &config).map_err(|e| e.to_string())?;
@@ -396,19 +474,62 @@ fn handle_tray_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
                         "--port".to_string(),
                         port.to_string(),
                     ];
-                    let cmd = std::process::Command::new(python_exe)
+                    let mut cmd = match std::process::Command::new(python_exe)
                         .args(&args)
                         .current_dir(&inst.path)
                         .creation_flags(0x08000000)
-                        .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::piped())
+                        .stderr(std::process::Stdio::piped())
                         .stdin(std::process::Stdio::null())
-                        .spawn();
-                    if let Ok(child) = cmd {
-                        let id_str = child.id().to_string();
-                        if let Ok(mut map) = app.state::<ProcessState>().0.lock() {
-                            map.insert(id_str, child);
-                        }
+                        .spawn()
+                    {
+                        Ok(c) => c,
+                        Err(_) => return,
+                    };
+
+                    let pid = cmd.id();
+                    let log = Arc::new(Mutex::new(String::new()));
+                    let instance_id = inst.id.clone();
+
+                    if let Some(stdout) = cmd.stdout.take() {
+                        let app_clone = app.clone();
+                        let log_clone = log.clone();
+                        let iid = instance_id.clone();
+                        std::thread::spawn(move || {
+                            let reader = std::io::BufReader::new(stdout);
+                            for line in reader.lines().map_while(Result::ok) {
+                                log_clone.lock().unwrap().push_str(&line);
+                                log_clone.lock().unwrap().push_str("\n");
+                                let _ = app_clone.emit("instance-log", InstanceLogPayload {
+                                    instance_id: iid.clone(),
+                                    pid,
+                                    line,
+                                });
+                            }
+                        });
+                    }
+
+                    if let Some(stderr) = cmd.stderr.take() {
+                        let app_clone = app.clone();
+                        let log_clone = log.clone();
+                        let iid = instance_id;
+                        std::thread::spawn(move || {
+                            let reader = std::io::BufReader::new(stderr);
+                            for line in reader.lines().map_while(Result::ok) {
+                                log_clone.lock().unwrap().push_str(&line);
+                                log_clone.lock().unwrap().push_str("\n");
+                                let _ = app_clone.emit("instance-log", InstanceLogPayload {
+                                    instance_id: iid.clone(),
+                                    pid,
+                                    line,
+                                });
+                            }
+                        });
+                    }
+
+                    let id_str = pid.to_string();
+                    if let Ok(mut map) = app.state::<ProcessState>().0.lock() {
+                        map.insert(id_str, ProcessInfo { child: cmd, log });
                     }
                 }
             }
@@ -457,9 +578,11 @@ pub fn run() {
             stop_instance,
             check_port,
             check_paths,
+            read_instance_log,
             run_update,
             get_system_proxy,
             get_config_path,
+            open_in_explorer,
             rebuild_tray_menu,
         ])
         .run(tauri::generate_context!())

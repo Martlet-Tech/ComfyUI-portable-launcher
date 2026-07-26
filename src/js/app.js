@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { listen } from '@tauri-apps/api/event';
 
 const configService = {
   async read() {
@@ -37,6 +38,9 @@ const instanceService = {
   },
   async rebuildTrayMenu() {
     await invoke('rebuild_tray_menu');
+  },
+  async openInExplorer(path) {
+    await invoke('open_in_explorer', { path });
   },
 };
 
@@ -92,6 +96,7 @@ function createInstanceDetail(container, handlers) {
   const aliasInput = document.getElementById('instanceAlias');
   const pathLabel = document.getElementById('instancePath');
   const portInput = document.getElementById('instancePort');
+  const customArgsInput = document.getElementById('customArgs');
   const pathRows = document.getElementById('pathRows');
   const launchBtns = container.querySelectorAll('.launch-btn');
   const stopBtn = container.querySelector('.stop-btn');
@@ -126,6 +131,9 @@ function createInstanceDetail(container, handlers) {
   portInput.addEventListener('change', () => {
     if (currentInstance) handlers.onPortChange(currentInstance.id, parseInt(portInput.value) || 8188);
   });
+  customArgsInput.addEventListener('change', () => {
+    if (currentInstance) handlers.onCustomArgsChange(currentInstance.id, customArgsInput.value);
+  });
 
   function render(instance, instanceStates) {
     currentInstance = instance;
@@ -133,6 +141,7 @@ function createInstanceDetail(container, handlers) {
     pathLabel.textContent = instance.path;
     aliasInput.value = instance.alias || '';
     portInput.value = instance.port || 8188;
+    customArgsInput.value = instance.custom_args || '';
 
     const st = instanceStates[instance.id] || { status: 'stopped' };
     const isRunning = st.status === 'running';
@@ -142,28 +151,75 @@ function createInstanceDetail(container, handlers) {
     launchBtns.forEach(b => b.disabled = isStarting);
     updateBtns.forEach(b => b.disabled = isStarting || isRunning);
     renderPathRows(instance);
+
+    const logSection = document.getElementById('startupLogSection');
+    const logContent = document.getElementById('startupLogContent');
+    const log = st.log || '';
+    if (log || isStarting) {
+      logSection.classList.remove('hidden');
+      logContent.textContent = log;
+      logContent.scrollTop = logContent.scrollHeight;
+    } else {
+      logSection.classList.add('hidden');
+    }
   }
 
   function renderPathRows(instance) {
     pathRows.innerHTML = '';
     pathInputs = {};
+
+    const instRow = document.createElement('div');
+    instRow.className = 'path-row';
+    instRow.innerHTML = `
+      <span class="path-title">实例目录</span>
+      <input type="text" id="path_instance_path" value="${escapeHtml(instance.path)}" />
+      <button class="folder-btn" data-key="instance_path">选择</button>
+      <button class="open-btn" data-key="instance_path">打开</button>
+    `;
+    const instInput = instRow.querySelector('input');
+    const instFolderBtn = instRow.querySelector('.folder-btn');
+    const instOpenBtn = instRow.querySelector('.open-btn');
+    pathInputs['instance_path'] = instInput;
+    instInput.addEventListener('change', () => {
+      handlers.onInstancePathChange(instance.id, instInput.value);
+    });
+    instFolderBtn.addEventListener('click', () => {
+      handlers.onSelectFolder(instance.id, 'instance_path');
+    });
+    instOpenBtn.addEventListener('click', () => {
+      handlers.onOpenFolder(instInput.value || instance.path);
+    });
+    pathRows.appendChild(instRow);
+
+    const sep = document.createElement('hr');
+    sep.className = 'path-separator';
+    pathRows.appendChild(sep);
+
     for (const def of pathDefs) {
+      const val = instance[def.key] || '';
       const row = document.createElement('div');
       row.className = 'path-row';
       row.innerHTML = `
         <span class="path-title">${def.label}</span>
-        <input type="text" id="path_${def.key}" value="${escapeHtml(instance[def.key] || '')}" />
+        <input type="text" id="path_${def.key}" value="${escapeHtml(val)}" />
         <button class="folder-btn" data-key="${def.key}">选择</button>
+        ${val ? '<button class="open-btn" data-key="' + def.key + '">打开</button>' : ''}
       `;
       const input = row.querySelector('input');
       const folderBtn = row.querySelector('.folder-btn');
+      const openBtn = row.querySelector('.open-btn');
       pathInputs[def.key] = input;
       input.addEventListener('change', () => {
         handlers.onPathChange(instance.id, def.key, input.value);
       });
-      folderBtn.addEventListener('click', async () => {
+      folderBtn.addEventListener('click', () => {
         handlers.onSelectFolder(instance.id, def.key);
       });
+      if (openBtn) {
+        openBtn.addEventListener('click', () => {
+          handlers.onOpenFolder(input.value);
+        });
+      }
       pathRows.appendChild(row);
     }
   }
@@ -284,6 +340,9 @@ const detailComponent = createInstanceDetail(detailEl, {
   onPortChange: handlePortChange,
   onPathChange: handlePathChange,
   onSelectFolder: handleSelectFolder,
+  onInstancePathChange: handleInstancePathChange,
+  onOpenFolder: handleOpenFolder,
+  onCustomArgsChange: handleCustomArgsChange,
 });
 
 const topbar = createTopbar({
@@ -307,6 +366,20 @@ async function init() {
   validateAllPaths();
   const configPath = await configService.getConfigPath();
   document.getElementById('configPathDisplay').textContent = configPath;
+
+  await listen('instance-log', (event) => {
+    const { instance_id, line } = event.payload;
+    const st = state.instanceStates[instance_id];
+    if (!st) return;
+    st.log = (st.log || '') + line + '\n';
+    if (instance_id === state.selectedId) {
+      const el = document.getElementById('startupLogContent');
+      if (el) {
+        el.textContent = st.log;
+        el.scrollTop = el.scrollHeight;
+      }
+    }
+  });
 }
 
 function renderAll() {
@@ -354,7 +427,7 @@ async function handleAdd() {
     temp_directory: null,
     user_directory: null,
   });
-  state.instanceStates[id] = { status: 'stopped', pid: null };
+  state.instanceStates[id] = { status: 'stopped', pid: null, log: '' };
   state.selectedId = id;
   await saveConfig();
   renderAll();
@@ -371,6 +444,8 @@ async function handleRemove() {
   }
   state.config.instances.splice(idx, 1);
   delete state.instanceStates[inst.id];
+  const logSection = document.getElementById('startupLogSection');
+  if (logSection) logSection.classList.add('hidden');
   state.selectedId = state.config.instances.length > 0
     ? state.config.instances[Math.min(idx, state.config.instances.length - 1)].id
     : null;
@@ -393,24 +468,27 @@ async function handleLaunch(id, mode) {
     conflictModal.open(`端口 ${port} 已被其他实例或程序占用。请修改端口后再试。`);
     return;
   }
-  state.instanceStates[id] = { status: 'starting', pid: null };
+  state.instanceStates[id] = { status: 'starting', pid: null, log: '' };
   renderAll();
   try {
     const pid = await instanceService.launchInstance({
+      instanceId: id,
       path: inst.path,
       mode,
       port,
+      customArgs: inst.custom_args || null,
       outputDirectory: inst.output_directory || null,
       inputDirectory: inst.input_directory || null,
       tempDirectory: inst.temp_directory || null,
       userDirectory: inst.user_directory || null,
       proxy: state.proxy.enabled ? state.proxy : null,
     });
-    state.instanceStates[id] = { status: 'starting', pid };
+    state.instanceStates[id] = { ...state.instanceStates[id], pid };
     renderAll();
     await pollPort(id, port);
   } catch (err) {
-    state.instanceStates[id] = { status: 'stopped', pid: null };
+    const prev = state.instanceStates[id] || {};
+    state.instanceStates[id] = { ...prev, status: 'stopped', pid: null };
     renderAll();
     conflictModal.open(`启动失败: ${err}`);
   }
@@ -451,7 +529,7 @@ async function handleStop(id) {
   const st = state.instanceStates[id];
   if (!st || !st.pid) return;
   try { await instanceService.stopInstance(st.pid); } catch (_) {}
-  state.instanceStates[id] = { status: 'stopped', pid: null };
+  state.instanceStates[id] = { ...st, status: 'stopped', pid: null };
   renderAll();
 }
 
@@ -486,6 +564,13 @@ async function handlePortChange(id, port) {
   await saveConfig();
 }
 
+async function handleCustomArgsChange(id, value) {
+  const inst = state.config.instances.find(i => i.id === id);
+  if (!inst) return;
+  inst.custom_args = value || null;
+  await saveConfig();
+}
+
 async function handlePathChange(id, key, value) {
   const inst = state.config.instances.find(i => i.id === id);
   if (!inst) return;
@@ -494,12 +579,30 @@ async function handlePathChange(id, key, value) {
   validatePathsForInstance(id);
 }
 
+async function handleInstancePathChange(id, value) {
+  const inst = state.config.instances.find(i => i.id === id);
+  if (!inst) return;
+  inst.path = value;
+  await saveConfig();
+  renderAll();
+  validatePathsForInstance(id);
+}
+
+async function handleOpenFolder(path) {
+  if (!path || !path.trim()) return;
+  try { await instanceService.openInExplorer(path.trim()); } catch (_) {}
+}
+
 async function handleSelectFolder(id, key) {
   const folder = await instanceService.selectFolder();
   if (!folder) return;
   const inst = state.config.instances.find(i => i.id === id);
   if (!inst) return;
-  inst[key] = folder;
+  if (key === 'instance_path') {
+    inst.path = folder;
+  } else {
+    inst[key] = folder;
+  }
   await saveConfig();
   renderAll();
   validatePathsForInstance(id);
@@ -524,8 +627,17 @@ async function validateAllPaths() {
 async function validatePathsForInstance(id) {
   const inst = state.config.instances.find(i => i.id === id);
   if (!inst || inst.id !== state.selectedId) return;
+
+  const exePaths = [
+    inst.path + '\\python_embeded\\python.exe',
+    inst.path + '\\ComfyUI\\main.py',
+  ];
+  const exeResults = await instanceService.checkPaths(exePaths);
+  const instancePathError = !exeResults.every(Boolean);
+  detailComponent.setPathError('instance_path', instancePathError);
+
   const pathKeys = ['output_directory', 'input_directory', 'temp_directory', 'user_directory'];
-  let hasError = false;
+  let hasError = instancePathError;
   for (const key of pathKeys) {
     const val = inst[key];
     if (val && val.trim()) {
