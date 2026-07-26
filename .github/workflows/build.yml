@@ -18,15 +18,21 @@ jobs:
         run: npm run build
       - name: Install Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
-      - name: Build Tauri app
-        run: npx tauri build
+      - name: Sync version and build
+        shell: pwsh
+        run: |
+          $ver = (Get-Content src-tauri/Cargo.toml | Select-String '^version = "(.+)"$').Matches.Groups[1].Value
+          $conf = Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
+          $conf.version = $ver
+          $conf | ConvertTo-Json -Depth 32 | Set-Content src-tauri/tauri.conf.json
+          npx tauri build
       - name: Pack zip
         shell: pwsh
         run: |
           $ver = (Get-Content src-tauri/Cargo.toml | Select-String '^version = "(.+)"$').Matches.Groups[1].Value
-          $exeName = "ComfyUI-portable-launcher.exe"
+          $exeName = "comfyui-portable-launcher.exe"
           Compress-Archive -Path "src-tauri\target\release\$exeName" -DestinationPath "ComfyUI-portable-launcher-v$ver.zip"
       - name: GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: v*.zip
+          files: ComfyUI-portable-launcher-v*.zip
