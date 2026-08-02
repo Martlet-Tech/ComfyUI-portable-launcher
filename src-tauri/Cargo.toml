@@ -1,6 +1,6 @@
 [package]
 name = "comfyui-portable-launcher"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 
 [lib]
@@ -16,4 +16,4 @@ tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 winreg = "0.52"
-windows = { version = "0.61", features = ["Win32_System_SystemInformation", "Win32_System_ProcessStatus"] }
+windows = { version = "0.61", features = ["Win32_System_SystemInformation", "Win32_System_ProcessStatus", "Win32_System_Threading"] }

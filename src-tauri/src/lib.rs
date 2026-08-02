@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::io::BufRead;
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tauri::menu::{Menu, MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager};
@@ -37,8 +37,23 @@ pub struct AppConfig {
     pub proxy: Option<ProxyConfig>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct ProcessReadyPayload {
+    instance_id: String,
+    pid: u32,
+    port: u16,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct ProcessExitedPayload {
+    instance_id: String,
+    pid: u32,
+    exit_code: i32,
+}
+
 pub(crate) struct ProcessInfo {
-    child: Child,
+    pid: u32,
+    port: u16,
     log: Arc<Mutex<String>>,
 }
 
@@ -67,6 +82,114 @@ pub struct StatusSnapshot {
 
 pub(crate) struct ProcessState(pub(crate) Mutex<HashMap<String, ProcessInfo>>);
 pub struct TrayHolder(pub Mutex<Option<TrayIcon>>);
+
+// ── Win32 helpers for PID management ─────────────────────────────────────
+
+#[repr(C)]
+struct MIB_TCPROW_OWNER_PID {
+    state: u32,
+    local_addr: u32,
+    local_port: u32,
+    remote_addr: u32,
+    remote_port: u32,
+    owning_pid: u32,
+}
+
+const AF_INET: u32 = 2;
+const TCP_TABLE_OWNER_PID_ALL: u32 = 5;
+
+#[link(name = "iphlpapi")]
+extern "system" {
+    fn GetExtendedTcpTable(
+        p_tcp_table: *mut std::ffi::c_void,
+        pdw_size: *mut u32,
+        b_order: i32,
+        ul_af: u32,
+        table_class: u32,
+        reserved: u32,
+    ) -> u32;
+}
+
+fn find_pids_by_port(target_port: u16) -> Vec<u32> {
+    let mut pids = Vec::new();
+    unsafe {
+        let mut size: u32 = 0;
+        let ret = GetExtendedTcpTable(
+            std::ptr::null_mut(),
+            &mut size,
+            false as i32,
+            AF_INET,
+            TCP_TABLE_OWNER_PID_ALL,
+            0,
+        );
+        if ret != 122 {
+            return pids;
+        }
+
+        let mut buf: Vec<u8> = vec![0u8; size as usize];
+        if GetExtendedTcpTable(
+            buf.as_mut_ptr() as *mut std::ffi::c_void,
+            &mut size,
+            false as i32,
+            AF_INET,
+            TCP_TABLE_OWNER_PID_ALL,
+            0,
+        ) != 0
+        {
+            return pids;
+        }
+
+        let num_entries = *(buf.as_ptr() as *const u32);
+        let row_size = std::mem::size_of::<MIB_TCPROW_OWNER_PID>();
+        for i in 0..num_entries {
+            let offset = std::mem::size_of::<u32>() + (i as usize) * row_size;
+            if offset + row_size > buf.len() {
+                break;
+            }
+            let row = &*(buf.as_ptr().add(offset) as *const MIB_TCPROW_OWNER_PID);
+            let port_host = u16::from_be(row.local_port as u16);
+            if port_host == target_port {
+                pids.push(row.owning_pid);
+            }
+        }
+    }
+    pids
+}
+
+fn is_process_alive(pid: u32) -> bool {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Threading::{
+        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_INFORMATION,
+    };
+
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_INFORMATION, false, pid);
+        match handle {
+            Ok(h) => {
+                let mut exit_code = 0u32;
+                let ok = GetExitCodeProcess(h, &mut exit_code).is_ok();
+                let _ = CloseHandle(h);
+                ok && exit_code == 259
+            }
+            Err(_) => false,
+        }
+    }
+}
+
+fn kill_process(pid: u32) {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
+
+    unsafe {
+        let handle = OpenProcess(PROCESS_TERMINATE, false, pid);
+        if let Ok(h) = handle {
+            let _ = TerminateProcess(h, 1);
+            let _ = CloseHandle(h);
+        }
+    }
+}
+
+// ── Config ──────────────────────────────────────────────────────────────
 
 fn config_dir() -> std::path::PathBuf {
     let home =
@@ -103,6 +226,45 @@ fn write_config(config: AppConfig) -> Result<(), String> {
 fn select_folder(app: AppHandle) -> Result<Option<String>, String> {
     let file = app.dialog().file().blocking_pick_folder();
     Ok(file.map(|p| p.to_string()))
+}
+
+// ── Launch / Monitor / Stop ─────────────────────────────────────────────
+
+fn check_port_sync(port: u16) -> bool {
+    use std::net::TcpStream;
+    if let Ok(addr) = format!("127.0.0.1:{}", port).parse::<std::net::SocketAddr>() {
+        TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_ok()
+    } else {
+        false
+    }
+}
+
+#[tauri::command]
+async fn check_port(port: u16) -> Result<bool, String> {
+    Ok(check_port_sync(port))
+}
+
+fn spawn_log_reader<R, F>(reader: R, emit: F)
+where
+    R: std::io::BufRead + Send + 'static,
+    F: Fn(String) + Send + 'static,
+{
+    std::thread::spawn(move || {
+        let mut reader = reader;
+        let mut buf = Vec::with_capacity(4096);
+        loop {
+            buf.clear();
+            match reader.read_until(b'\n', &mut buf) {
+                Ok(0) => break,
+                Ok(_) => {
+                    let decoded = String::from_utf8_lossy(&buf);
+                    let line = decoded.trim_end_matches(|c| c == '\r' || c == '\n');
+                    emit(line.to_string());
+                }
+                Err(_) => break,
+            }
+        }
+    });
 }
 
 #[tauri::command]
@@ -169,8 +331,10 @@ async fn launch_instance(
     cmd.current_dir(&path);
     cmd.creation_flags(0x08000000);
     cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::null());
+    cmd.stderr(Stdio::piped());
     cmd.stdin(Stdio::null());
+    cmd.env("PYTHONIOENCODING", "utf-8");
+    cmd.env("PYTHONUTF8", "1");
 
     if let Some(ref p) = proxy {
         if p.enabled {
@@ -190,25 +354,119 @@ async fn launch_instance(
         let app_clone = app.clone();
         let log_clone = log.clone();
         let iid = instance_id.clone();
-        std::thread::spawn(move || {
-            let reader = std::io::BufReader::new(stdout);
-            for line in reader.lines().map_while(Result::ok) {
-                log_clone.lock().unwrap().push_str(&line);
-                log_clone.lock().unwrap().push_str("\n");
-                let _ = app_clone.emit("instance-log", InstanceLogPayload {
-                    instance_id: iid.clone(),
-                    pid,
-                    line,
-                });
-            }
+        spawn_log_reader(std::io::BufReader::new(stdout), move |line| {
+            log_clone.lock().unwrap().push_str(&line);
+            log_clone.lock().unwrap().push_str("\n");
+            let _ = app_clone.emit("instance-log", InstanceLogPayload {
+                instance_id: iid.clone(),
+                pid,
+                line,
+            });
+        });
+    }
+
+    if let Some(stderr) = child.stderr.take() {
+        let app_clone = app.clone();
+        let log_clone = log.clone();
+        let iid = instance_id.clone();
+        spawn_log_reader(std::io::BufReader::new(stderr), move |line| {
+            log_clone.lock().unwrap().push_str(&line);
+            log_clone.lock().unwrap().push_str("\n");
+            let _ = app_clone.emit("instance-log", InstanceLogPayload {
+                instance_id: iid.clone(),
+                pid,
+                line: format!("[stderr] {}", line),
+            });
         });
     }
 
     let state = app.state::<ProcessState>();
     let mut map = state.0.lock().map_err(|e| e.to_string())?;
-    map.insert(pid.to_string(), ProcessInfo { child, log });
+    map.insert(pid.to_string(), ProcessInfo { pid, port, log });
+
+    spawn_process_monitor(app.clone(), instance_id.clone(), pid, port);
 
     Ok(pid)
+}
+
+fn spawn_process_monitor(
+    app: AppHandle,
+    instance_id: String,
+    mut pid: u32,
+    port: u16,
+) {
+    std::thread::spawn(move || {
+        let mut ready_emitted = false;
+        let mut dead_emitted = false;
+        let mut grace_start: Option<Instant> = None;
+        const GRACE_PERIOD: Duration = Duration::from_secs(30);
+
+        loop {
+            let tracked = {
+                let state = app.state::<ProcessState>();
+                let locked = state.0.lock();
+                match locked {
+                    Ok(map) => map.contains_key(&pid.to_string()),
+                    Err(_) => false,
+                }
+            };
+            if !tracked {
+                break;
+            }
+
+            let port_open = check_port_sync(port);
+
+            if port_open {
+                grace_start = None;
+
+                let current_pids = find_pids_by_port(port);
+                if let Some(current_pid) = current_pids.into_iter().next() {
+                    if current_pid != pid {
+                        let state = app.state::<ProcessState>();
+                        if let Ok(mut map) = state.0.lock() {
+                            if let Some(info) = map.remove(&pid.to_string()) {
+                                map.insert(current_pid.to_string(), ProcessInfo {
+                                    pid: current_pid,
+                                    port,
+                                    log: info.log,
+                                });
+                            }
+                        }
+                        pid = current_pid;
+                    }
+                }
+
+                if !ready_emitted || dead_emitted {
+                    let _ = app.emit("process-ready", ProcessReadyPayload {
+                        instance_id: instance_id.clone(),
+                        pid,
+                        port,
+                    });
+                    ready_emitted = true;
+                    dead_emitted = false;
+                }
+            } else if !is_process_alive(pid) {
+                match grace_start {
+                    None => grace_start = Some(Instant::now()),
+                    Some(start) if start.elapsed() >= GRACE_PERIOD => {
+                        if !dead_emitted {
+                            let _ = app.emit("process-exited", ProcessExitedPayload {
+                                instance_id: instance_id.clone(),
+                                pid,
+                                exit_code: -1,
+                            });
+                            dead_emitted = true;
+                        }
+                    }
+                    _ => {}
+                }
+            } else {
+                grace_start = None;
+            }
+
+            std::thread::sleep(Duration::from_secs(1));
+        }
+    });
 }
 
 #[tauri::command]
@@ -216,26 +474,24 @@ async fn stop_instance(app: AppHandle, pid: u32) -> Result<(), String> {
     let state = app.state::<ProcessState>();
     let mut map = state.0.lock().map_err(|e| e.to_string())?;
 
-    if let Some(mut info) = map.remove(&pid.to_string()) {
-        info.child.kill().map_err(|e| e.to_string())?;
-        info.child.wait().ok();
+    if let Some(info) = map.remove(&pid.to_string()) {
+        let port = info.port;
+        drop(map);
+
+        kill_process(pid);
+        for p in find_pids_by_port(port) {
+            if p != pid {
+                kill_process(p);
+            }
+        }
+
         Ok(())
     } else {
         Err("Process not found".to_string())
     }
 }
 
-#[tauri::command]
-async fn check_port(port: u16) -> Result<bool, String> {
-    use std::net::TcpStream;
-    let addr = format!("127.0.0.1:{}", port)
-        .parse::<std::net::SocketAddr>()
-        .map_err(|e| e.to_string())?;
-    match TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(500)) {
-        Ok(_) => Ok(true),
-        Err(_) => Ok(false),
-    }
-}
+// ── Misc commands ───────────────────────────────────────────────────────
 
 #[tauri::command]
 async fn check_paths(paths: Vec<String>) -> Result<Vec<bool>, String> {
@@ -291,6 +547,8 @@ async fn run_update(
     cmd.creation_flags(0x08000000);
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
+    cmd.env("PYTHONIOENCODING", "utf-8");
+    cmd.env("PYTHONUTF8", "1");
 
     if let Some(ref p) = proxy {
         if p.enabled {
@@ -309,28 +567,22 @@ async fn run_update(
     if let Some(stdout) = child.stdout.take() {
         let app_clone = app.clone();
         let iid = instance_id.clone();
-        std::thread::spawn(move || {
-            let reader = std::io::BufReader::new(stdout);
-            for line in reader.lines().map_while(Result::ok) {
-                let _ = app_clone.emit("update-log", UpdateLogPayload {
-                    instance_id: iid.clone(),
-                    line,
-                });
-            }
+        spawn_log_reader(std::io::BufReader::new(stdout), move |line| {
+            let _ = app_clone.emit("update-log", UpdateLogPayload {
+                instance_id: iid.clone(),
+                line,
+            });
         });
     }
 
     if let Some(stderr) = child.stderr.take() {
         let app_clone = app.clone();
         let iid = instance_id.clone();
-        std::thread::spawn(move || {
-            let reader = std::io::BufReader::new(stderr);
-            for line in reader.lines().map_while(Result::ok) {
-                let _ = app_clone.emit("update-log", UpdateLogPayload {
-                    instance_id: iid.clone(),
-                    line: format!("[stderr] {}", line),
-                });
-            }
+        spawn_log_reader(std::io::BufReader::new(stderr), move |line| {
+            let _ = app_clone.emit("update-log", UpdateLogPayload {
+                instance_id: iid.clone(),
+                line: format!("[stderr] {}", line),
+            });
         });
     }
 
@@ -366,32 +618,28 @@ async fn run_update(
             pip_cmd.creation_flags(0x08000000);
             pip_cmd.stdout(Stdio::piped());
             pip_cmd.stderr(Stdio::piped());
+            pip_cmd.env("PYTHONIOENCODING", "utf-8");
+            pip_cmd.env("PYTHONUTF8", "1");
 
             if let Ok(mut pip_child) = pip_cmd.spawn() {
                 if let Some(ps) = pip_child.stdout.take() {
                     let app_clone = app.clone();
                     let iid = instance_id.clone();
-                    std::thread::spawn(move || {
-                        let reader = std::io::BufReader::new(ps);
-                        for line in reader.lines().map_while(Result::ok) {
-                            let _ = app_clone.emit("update-log", UpdateLogPayload {
-                                instance_id: iid.clone(),
-                                line,
-                            });
-                        }
+                    spawn_log_reader(std::io::BufReader::new(ps), move |line| {
+                        let _ = app_clone.emit("update-log", UpdateLogPayload {
+                            instance_id: iid.clone(),
+                            line,
+                        });
                     });
                 }
                 if let Some(ps) = pip_child.stderr.take() {
                     let app_clone = app.clone();
                     let iid = instance_id.clone();
-                    std::thread::spawn(move || {
-                        let reader = std::io::BufReader::new(ps);
-                        for line in reader.lines().map_while(Result::ok) {
-                            let _ = app_clone.emit("update-log", UpdateLogPayload {
-                                instance_id: iid.clone(),
-                                line: format!("[stderr] {}", line),
-                            });
-                        }
+                    spawn_log_reader(std::io::BufReader::new(ps), move |line| {
+                        let _ = app_clone.emit("update-log", UpdateLogPayload {
+                            instance_id: iid.clone(),
+                            line: format!("[stderr] {}", line),
+                        });
                     });
                 }
                 pip_child.wait().ok();
@@ -648,6 +896,12 @@ fn handle_tray_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
             }
         }
         "exit" => {
+            let state = app.state::<ProcessState>();
+            if let Ok(map) = state.0.lock() {
+                for (_, info) in map.iter() {
+                    kill_process(info.pid);
+                }
+            }
             app.exit(0);
         }
         id => {
@@ -670,8 +924,10 @@ fn handle_tray_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
                         .current_dir(&inst.path)
                         .creation_flags(0x08000000)
                         .stdout(std::process::Stdio::piped())
-                        .stderr(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::piped())
                         .stdin(std::process::Stdio::null())
+                        .env("PYTHONIOENCODING", "utf-8")
+                        .env("PYTHONUTF8", "1")
                         .spawn()
                     {
                         Ok(c) => c,
@@ -686,24 +942,37 @@ fn handle_tray_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
                         let app_clone = app.clone();
                         let log_clone = log.clone();
                         let iid = instance_id.clone();
-                        std::thread::spawn(move || {
-                            let reader = std::io::BufReader::new(stdout);
-                            for line in reader.lines().map_while(Result::ok) {
-                                log_clone.lock().unwrap().push_str(&line);
-                                log_clone.lock().unwrap().push_str("\n");
-                                let _ = app_clone.emit("instance-log", InstanceLogPayload {
-                                    instance_id: iid.clone(),
-                                    pid,
-                                    line,
-                                });
-                            }
+                        spawn_log_reader(std::io::BufReader::new(stdout), move |line| {
+                            log_clone.lock().unwrap().push_str(&line);
+                            log_clone.lock().unwrap().push_str("\n");
+                            let _ = app_clone.emit("instance-log", InstanceLogPayload {
+                                instance_id: iid.clone(),
+                                pid,
+                                line,
+                            });
+                        });
+                    }
+
+                    if let Some(stderr) = cmd.stderr.take() {
+                        let app_clone = app.clone();
+                        let log_clone = log.clone();
+                        let iid = instance_id.clone();
+                        spawn_log_reader(std::io::BufReader::new(stderr), move |line| {
+                            log_clone.lock().unwrap().push_str(&line);
+                            log_clone.lock().unwrap().push_str("\n");
+                            let _ = app_clone.emit("instance-log", InstanceLogPayload {
+                                instance_id: iid.clone(),
+                                pid,
+                                line: format!("[stderr] {}", line),
+                            });
                         });
                     }
 
                     let id_str = pid.to_string();
                     if let Ok(mut map) = app.state::<ProcessState>().0.lock() {
-                        map.insert(id_str, ProcessInfo { child: cmd, log });
+                        map.insert(id_str, ProcessInfo { pid, port, log });
                     }
+                    spawn_process_monitor(app.clone(), instance_id, pid, port);
                 }
             }
         }

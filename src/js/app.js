@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
+import ansiLog from './ansiLog.js';
 
 const configService = {
   async read() {
@@ -200,7 +201,7 @@ function createInstanceDetail(container, handlers) {
     const log = st.log || '';
     if (log || isStarting || isUpdating) {
       logSection.classList.remove('hidden');
-      logContent.textContent = log;
+      logContent.innerHTML = st.logHtml || '';
       if (!isUpdating) logContent.scrollTop = logContent.scrollHeight;
     } else {
       logSection.classList.add('hidden');
@@ -428,6 +429,33 @@ const settingsModal = createSettingsModal({ onProxyChange: handleProxyChange });
 const logModal = createLogModal();
 const conflictModal = createConflictModal();
 
+function appendLog(st, text) {
+  const parts = text.replace(/\r\n/g, '\n').split('\r');
+  for (let i = 0; i < parts.length; i++) {
+    const seg = parts[i];
+    const cur = st.log || '';
+    const curLen = cur.length - (cur.lastIndexOf('\n') + 1);
+    if (i > 0 && curLen > 0) {
+      const nl = cur.lastIndexOf('\n');
+      st.log = cur.slice(0, nl + 1) + seg;
+      const html = st.logHtml || '';
+      const hnl = html.lastIndexOf('\n');
+      st.logHtml = html.slice(0, hnl + 1);
+    } else {
+      st.log = cur + seg;
+    }
+    const res = ansiLog.parse(seg, st.ansiState || ansiLog.defaultState);
+    st.ansiState = res.state;
+    st.logHtml = (st.logHtml || '') + res.html;
+  }
+}
+
+function resetLog(st) {
+  st.log = '';
+  st.logHtml = '';
+  st.ansiState = { ...ansiLog.defaultState };
+}
+
 async function init() {
   state.config = await configService.read();
   state.proxy = state.config.proxy || { enabled: false, host: null, port: null };
@@ -448,11 +476,12 @@ async function init() {
     const { instance_id, line } = event.payload;
     const st = state.instanceStates[instance_id];
     if (!st) return;
-    st.log = (st.log || '') + line + '\n';
+    appendLog(st, line + '\n');
+    if (st.status === 'starting') armWatchdog(instance_id);
     if (instance_id === state.selectedId) {
       const el = document.getElementById('startupLogContent');
       if (el) {
-        el.textContent = st.log;
+        el.innerHTML = st.logHtml || '';
         el.scrollTop = el.scrollHeight;
       }
     }
@@ -462,12 +491,36 @@ async function init() {
     const { instance_id, line } = event.payload;
     const st = state.instanceStates[instance_id];
     if (!st) return;
-    st.log = (st.log || '') + line + '\n';
+    appendLog(st, line + '\n');
     if (instance_id === state.selectedId) {
       const el = document.getElementById('startupLogContent');
       if (el) {
-        el.textContent = st.log;
+        el.innerHTML = st.logHtml || '';
         el.scrollTop = el.scrollHeight;
+      }
+    }
+  });
+
+  await listen('process-ready', (event) => {
+    const { instance_id, pid } = event.payload;
+    const st = state.instanceStates[instance_id];
+    if (st && (st.status === 'starting' || st.status === 'running')) {
+      state.instanceStates[instance_id] = { ...st, status: 'running', pid };
+      renderAll();
+      minimizeApp();
+    }
+  });
+
+  await listen('process-exited', (event) => {
+    const { instance_id, exit_code } = event.payload;
+    const st = state.instanceStates[instance_id];
+    if (st && (st.status === 'starting' || st.status === 'running')) {
+      clearWatchdog(instance_id);
+      const wasRunning = st.status === 'running';
+      state.instanceStates[instance_id] = { ...st, status: 'stopped', pid: null };
+      renderAll();
+      if (wasRunning) {
+        conflictModal.open(`ComfyUI 进程已退出 (exit code: ${exit_code})`);
       }
     }
   });
@@ -521,7 +574,7 @@ async function handleAdd() {
     temp_directory: null,
     user_directory: null,
   });
-  state.instanceStates[id] = { status: 'stopped', pid: null, log: '' };
+  state.instanceStates[id] = { status: 'stopped', pid: null, log: '', logHtml: '', ansiState: { ...ansiLog.defaultState } };
   state.selectedId = id;
   await saveConfig();
   renderAll();
@@ -536,6 +589,7 @@ async function handleRemove() {
   if (st && st.status === 'running') {
     await handleStop(inst.id);
   }
+  clearWatchdog(inst.id);
   state.config.instances.splice(idx, 1);
   delete state.instanceStates[inst.id];
   const logSection = document.getElementById('startupLogSection');
@@ -566,7 +620,7 @@ async function handleLaunch(id, mode) {
     conflictModal.open(`端口 ${port} 已被其他实例或程序占用。请修改端口后再试。`);
     return;
   }
-  state.instanceStates[id] = { status: 'starting', pid: null, log: '' };
+  state.instanceStates[id] = { status: 'starting', pid: null, log: '', logHtml: '', ansiState: { ...ansiLog.defaultState }, watchdog: null };
   renderAll();
   try {
     const pid = await instanceService.launchInstance({
@@ -583,8 +637,11 @@ async function handleLaunch(id, mode) {
     });
     state.instanceStates[id] = { ...state.instanceStates[id], pid };
     renderAll();
+    armWatchdog(id);
     await pollPort(id, port);
+    clearWatchdog(id);
   } catch (err) {
+    clearWatchdog(id);
     const prev = state.instanceStates[id] || {};
     state.instanceStates[id] = { ...prev, status: 'stopped', pid: null };
     renderAll();
@@ -603,11 +660,37 @@ async function checkPortConflict(excludeId, port) {
   return await instanceService.checkPort(port);
 }
 
+const STARTUP_TIMEOUT_MS = 60000;
+
+function armWatchdog(id) {
+  clearWatchdog(id);
+  const st = state.instanceStates[id];
+  if (!st || st.status !== 'starting') return;
+  st.watchdog = window.setTimeout(() => onWatchdogTimeout(id), STARTUP_TIMEOUT_MS);
+}
+
+function clearWatchdog(id) {
+  const st = state.instanceStates[id];
+  if (st && st.watchdog) {
+    clearTimeout(st.watchdog);
+    st.watchdog = null;
+  }
+}
+
+function onWatchdogTimeout(id) {
+  const st = state.instanceStates[id];
+  if (!st || st.status !== 'starting') return;
+  st.watchdog = null;
+  appendLog(st, `[警告] 启动超时: 进程 ${STARTUP_TIMEOUT_MS / 1000} 秒无输出, 仍在等待...\n`);
+  renderAll();
+  conflictModal.open(`启动超时: 进程 ${STARTUP_TIMEOUT_MS / 1000} 秒无输出。\n\n后台进程仍在继续追踪, 若恢复输出并启动成功将自动变为运行中。`);
+}
+
 async function pollPort(id, port) {
-  for (let i = 0; i < 60; i++) {
+  while (true) {
     await sleep(1000);
     const st = state.instanceStates[id];
-    if (!st || st.status === 'stopped') return;
+    if (!st || st.status !== 'starting') return;
     if (await instanceService.checkPort(port)) {
       state.instanceStates[id] = { ...st, status: 'running' };
       renderAll();
@@ -615,17 +698,12 @@ async function pollPort(id, port) {
       return;
     }
   }
-  const st = state.instanceStates[id];
-  if (st && st.status === 'starting') {
-    state.instanceStates[id] = { ...st, status: 'stopped' };
-    renderAll();
-    conflictModal.open('启动超时：端口 ' + port + ' 在 60 秒内未就绪');
-  }
 }
 
 async function handleStop(id) {
   const st = state.instanceStates[id];
   if (!st || !st.pid) return;
+  clearWatchdog(id);
   if (state.launchStartTime !== null) {
     state.accumulatedMs += Date.now() - state.launchStartTime;
     state.launchStartTime = null;
@@ -638,9 +716,9 @@ async function handleStop(id) {
 async function handleUpdate(id, type) {
   const inst = state.config.instances.find(i => i.id === id);
   if (!inst) return;
-  const st = state.instanceStates[id] || (state.instanceStates[id] = { status: 'stopped' });
+  const st = state.instanceStates[id] || (state.instanceStates[id] = { status: 'stopped', log: '', logHtml: '', ansiState: { ...ansiLog.defaultState } });
   st.updating = true;
-  st.log = '';
+  resetLog(st);
   renderAll();
   try {
     await instanceService.runUpdate({
@@ -649,9 +727,9 @@ async function handleUpdate(id, type) {
       updateType: type,
       proxy: state.proxy.enabled ? state.proxy : null,
     });
-    st.log = (st.log || '') + '✓ 更新完成\n';
+    appendLog(st, '✓ 更新完成\n');
   } catch (err) {
-    st.log = (st.log || '') + '✗ 更新失败: ' + (typeof err === 'string' ? err : JSON.stringify(err)) + '\n';
+    appendLog(st, '✗ 更新失败: ' + (typeof err === 'string' ? err : JSON.stringify(err)) + '\n');
   } finally {
     st.updating = false;
     renderAll();
