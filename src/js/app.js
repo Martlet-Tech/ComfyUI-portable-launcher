@@ -43,6 +43,9 @@ const instanceService = {
   async openInExplorer(path) {
     await invoke('open_in_explorer', { path });
   },
+  async openUrl(url) {
+    await invoke('open_url', { url });
+  },
   async getComfyuiHelp(path) {
     return await invoke('get_comfyui_help', { path });
   },
@@ -106,6 +109,7 @@ function createInstanceDetail(container, handlers) {
   const pathRows = document.getElementById('pathRows');
   const launchBtns = container.querySelectorAll('.launch-btn');
   const stopBtn = container.querySelector('.stop-btn');
+  const openWebBtn = document.getElementById('openWebBtn');
   const updateBtns = container.querySelectorAll('.update-btn');
 
   const pathDefs = [
@@ -125,6 +129,9 @@ function createInstanceDetail(container, handlers) {
   });
   stopBtn.addEventListener('click', () => {
     if (currentInstance) handlers.onStop(currentInstance.id);
+  });
+  openWebBtn.addEventListener('click', () => {
+    if (currentInstance) handlers.onOpenWeb(currentInstance.id, currentInstance.port || 8188);
   });
   updateBtns.forEach(btn => {
     btn.addEventListener('click', () => {
@@ -192,6 +199,7 @@ function createInstanceDetail(container, handlers) {
     const isUpdating = st.updating === true;
     launchBtns.forEach(b => b.classList.toggle('hidden', isRunning || isStarting));
     stopBtn.classList.toggle('hidden', !isRunning);
+    openWebBtn.classList.toggle('hidden', !isRunning);
     launchBtns.forEach(b => b.disabled = isStarting);
     updateBtns.forEach(b => b.disabled = isStarting || isRunning || isUpdating);
     renderPathRows(instance);
@@ -200,9 +208,11 @@ function createInstanceDetail(container, handlers) {
     const logContent = document.getElementById('startupLogContent');
     const log = st.log || '';
     if (log || isStarting || isUpdating) {
+      const wasHidden = logSection.classList.contains('hidden');
       logSection.classList.remove('hidden');
+      if (wasHidden && st.autoScroll === false) st.autoScroll = true;
       logContent.innerHTML = st.logHtml || '';
-      if (!isUpdating) logContent.scrollTop = logContent.scrollHeight;
+      scrollLogIfPinned(logContent, st);
     } else {
       logSection.classList.add('hidden');
     }
@@ -409,6 +419,7 @@ const listComponent = createInstanceList(listEl, { onSelect: handleSelect });
 const detailComponent = createInstanceDetail(detailEl, {
   onLaunch: handleLaunch,
   onStop: handleStop,
+  onOpenWeb: handleOpenWeb,
   onUpdate: handleUpdate,
   onAliasChange: handleAliasChange,
   onPortChange: handlePortChange,
@@ -456,6 +467,33 @@ function resetLog(st) {
   st.ansiState = { ...ansiLog.defaultState };
 }
 
+function scrollLogIfPinned(el, st) {
+  if (el && st && st.autoScroll !== false) el.scrollTop = el.scrollHeight;
+}
+
+function isNearLogBottom(el) {
+  return el.scrollTop + el.clientHeight >= el.scrollHeight - 4;
+}
+
+function setupLogScrollControls() {
+  const el = document.getElementById('startupLogContent');
+  el.addEventListener('scroll', () => {
+    const st = state.instanceStates[state.selectedId];
+    if (!st) return;
+    st.autoScroll = isNearLogBottom(el);
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'End') return;
+    const section = document.getElementById('startupLogSection');
+    if (!section || section.classList.contains('hidden')) return;
+    if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
+    const st = state.instanceStates[state.selectedId];
+    if (st) st.autoScroll = true;
+    e.preventDefault();
+    el.scrollTop = el.scrollHeight;
+  });
+}
+
 async function init() {
   state.config = await configService.read();
   state.proxy = state.config.proxy || { enabled: false, host: null, port: null };
@@ -482,7 +520,7 @@ async function init() {
       const el = document.getElementById('startupLogContent');
       if (el) {
         el.innerHTML = st.logHtml || '';
-        el.scrollTop = el.scrollHeight;
+        scrollLogIfPinned(el, st);
       }
     }
   });
@@ -496,7 +534,7 @@ async function init() {
       const el = document.getElementById('startupLogContent');
       if (el) {
         el.innerHTML = st.logHtml || '';
-        el.scrollTop = el.scrollHeight;
+        scrollLogIfPinned(el, st);
       }
     }
   });
@@ -525,6 +563,7 @@ async function init() {
     }
   });
 
+  setupLogScrollControls();
   setInterval(updateStatusBar, 1000);
   setInterval(pollStatusSnapshot, 1000);
 }
@@ -603,6 +642,8 @@ async function handleRemove() {
 
 function handleSelect(id) {
   state.selectedId = id;
+  const st = state.instanceStates[id];
+  if (st) st.autoScroll = true;
   renderAll();
   validatePathsForInstance(id);
   document.getElementById('statusRight').textContent = '...';
@@ -711,6 +752,10 @@ async function handleStop(id) {
   try { await instanceService.stopInstance(st.pid); } catch (_) {}
   state.instanceStates[id] = { ...st, status: 'stopped', pid: null };
   renderAll();
+}
+
+async function handleOpenWeb(id, port) {
+  await instanceService.openUrl('http://127.0.0.1:' + port);
 }
 
 async function handleUpdate(id, type) {

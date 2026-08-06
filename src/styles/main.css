@@ -64,6 +64,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .launch-btn:disabled, .update-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .stop-btn { padding: 8px 16px; border-radius: 4px; font-size: 13px; cursor: pointer; background: #c0392b; border: 1px solid #c0392b; color: #fff; }
 .stop-btn:hover { background: #a93226; }
+.open-web-btn { padding: 8px 16px; border-radius: 4px; font-size: 13px; cursor: pointer; background: #1a6b4a; border: 1px solid #1a6b4a; color: #fff; }
+.open-web-btn:hover { background: #14593d; }
 .hidden { display: none !important; }
 .update-btn { background: #0f3460; border: 1px solid #1a3a6a; color: #e0e0e0; }
 .update-btn:hover { background: #1a3a6a; }

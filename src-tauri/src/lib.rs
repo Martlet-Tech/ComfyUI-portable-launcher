@@ -710,6 +710,16 @@ fn open_in_explorer(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    std::process::Command::new("cmd")
+        .args(["/c", "start", "", &url])
+        .creation_flags(0x08000000)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 async fn get_comfyui_help(path: String) -> Result<String, String> {
     let python_exe = std::path::Path::new(&path).join("python_embeded\\python.exe");
     let main_py = std::path::Path::new(&path).join("ComfyUI\\main.py");
@@ -1025,6 +1035,7 @@ pub fn run() {
             get_system_proxy,
             get_config_path,
             open_in_explorer,
+            open_url,
             get_comfyui_help,
             get_git_hash,
             get_status_snapshot,
