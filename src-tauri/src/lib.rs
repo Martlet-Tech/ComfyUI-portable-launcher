@@ -13,9 +13,33 @@ use std::os::windows::process::CommandExt;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ProxyConfig {
-    pub enabled: bool,
-    pub host: Option<String>,
+    #[serde(default)]
+    pub r#type: String,
+    #[serde(default)]
+    pub ip: Option<String>,
+    #[serde(default)]
     pub port: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ResolvedProxy {
+    pub host: String,
+    pub port: u16,
+    #[serde(default)]
+    pub scheme: String,
+}
+
+fn apply_proxy(cmd: &mut Command, proxy: &Option<ResolvedProxy>) {
+    if let Some(ref p) = proxy {
+        let proxy_str = format!("{}://{}:{}", p.scheme, p.host, p.port);
+        cmd.env("HTTP_PROXY", &proxy_str);
+        cmd.env("HTTPS_PROXY", &proxy_str);
+        cmd.env("ALL_PROXY", &proxy_str);
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -279,7 +303,6 @@ async fn launch_instance(
     input_directory: Option<String>,
     temp_directory: Option<String>,
     user_directory: Option<String>,
-    proxy: Option<ProxyConfig>,
 ) -> Result<u32, String> {
     let python_exe = std::path::Path::new(&path).join("python_embeded\\python.exe");
     let main_py = std::path::Path::new(&path).join("ComfyUI\\main.py");
@@ -335,16 +358,6 @@ async fn launch_instance(
     cmd.stdin(Stdio::null());
     cmd.env("PYTHONIOENCODING", "utf-8");
     cmd.env("PYTHONUTF8", "1");
-
-    if let Some(ref p) = proxy {
-        if p.enabled {
-            if let (Some(ref h), Some(port)) = (&p.host, p.port) {
-                let proxy_str = format!("http://{}:{}", h, port);
-                cmd.env("HTTP_PROXY", &proxy_str);
-                cmd.env("HTTPS_PROXY", &proxy_str);
-            }
-        }
-    }
 
     let mut child = cmd.spawn().map_err(|e| format!("Failed to launch: {}", e))?;
     let pid = child.id();
@@ -518,7 +531,7 @@ async fn run_update(
     instance_id: String,
     path: String,
     update_type: String,
-    proxy: Option<ProxyConfig>,
+    proxy: Option<ResolvedProxy>,
 ) -> Result<(), String> {
     let python_exe = std::path::Path::new(&path).join("python_embeded\\python.exe");
     let update_py = std::path::Path::new(&path).join("update\\update.py");
@@ -550,15 +563,7 @@ async fn run_update(
     cmd.env("PYTHONIOENCODING", "utf-8");
     cmd.env("PYTHONUTF8", "1");
 
-    if let Some(ref p) = proxy {
-        if p.enabled {
-            if let (Some(ref h), Some(port)) = (&p.host, p.port) {
-                let proxy_str = format!("http://{}:{}", h, port);
-                cmd.env("HTTP_PROXY", &proxy_str);
-                cmd.env("HTTPS_PROXY", &proxy_str);
-            }
-        }
-    }
+    apply_proxy(&mut cmd, &proxy);
 
     let mut child = cmd
         .spawn()
@@ -650,48 +655,126 @@ async fn run_update(
     Ok(())
 }
 
+fn parse_proxy_url(url: &str) -> Option<ResolvedProxy> {
+    let url = url.trim();
+    if url.is_empty() {
+        return None;
+    }
+    let (scheme, rest) = match url.find("://") {
+        Some(i) => (&url[..i], &url[i + 3..]),
+        None => ("http", url),
+    };
+    let scheme = scheme.to_lowercase();
+    if scheme != "http" && scheme != "socks5" {
+        return None;
+    }
+    let (host, port_str) = match rest.rfind(':') {
+        Some(i) => (&rest[..i], &rest[i + 1..]),
+        None => (rest, ""),
+    };
+    let port: u16 = port_str.parse().unwrap_or(8080);
+    Some(ResolvedProxy {
+        host: host.to_string(),
+        port,
+        scheme,
+    })
+}
+
+fn env_proxy() -> Option<ResolvedProxy> {
+    for key in ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"] {
+        if let Ok(val) = std::env::var(key) {
+            if let Some(p) = parse_proxy_url(&val) {
+                return Some(p);
+            }
+        }
+    }
+    None
+}
+
 #[tauri::command]
-fn get_system_proxy() -> Result<Option<ProxyConfig>, String> {
+fn get_system_proxy() -> Result<Option<ResolvedProxy>, String> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let key_path = "Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
 
     let key = match hkcu.open_subkey(key_path) {
         Ok(k) => k,
-        Err(_) => return Ok(None),
+        Err(_) => return Ok(env_proxy()),
     };
 
     let proxy_enable: u32 = key.get_value("ProxyEnable").unwrap_or(0);
     if proxy_enable == 0 {
-        return Ok(Some(ProxyConfig {
-            enabled: false,
-            host: None,
-            port: None,
-        }));
+        return Ok(env_proxy());
     }
 
     let server: String = key.get_value("ProxyServer").unwrap_or_default();
     if server.is_empty() {
-        return Ok(Some(ProxyConfig {
-            enabled: true,
-            host: None,
-            port: None,
-        }));
+        return Ok(env_proxy());
     }
 
     if let Some(idx) = server.find(':') {
         let host = server[..idx].to_string();
         let port: u16 = server[idx + 1..].parse().unwrap_or(8080);
-        Ok(Some(ProxyConfig {
-            enabled: true,
-            host: Some(host),
-            port: Some(port),
+        Ok(Some(ResolvedProxy {
+            host,
+            port,
+            scheme: "http".to_string(),
         }))
     } else {
-        Ok(Some(ProxyConfig {
-            enabled: true,
-            host: Some(server),
-            port: Some(8080),
+        Ok(Some(ResolvedProxy {
+            host: server,
+            port: 8080,
+            scheme: "http".to_string(),
         }))
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct GitProxyTestResult {
+    ok: bool,
+    message: String,
+    duration_ms: u64,
+}
+
+#[tauri::command]
+async fn test_git_proxy(path: String, proxy: Option<ResolvedProxy>) -> Result<GitProxyTestResult, String> {
+    let python_exe = std::path::Path::new(&path).join("python_embeded\\python.exe");
+    let comfy_dir = std::path::Path::new(&path).join("ComfyUI");
+    if !python_exe.exists() {
+        return Err("python_embeded/python.exe not found".to_string());
+    }
+    if !comfy_dir.exists() {
+        return Err("ComfyUI directory not found".to_string());
+    }
+    let script = r#"
+import sys, time, pygit2
+t = time.time()
+try:
+    repo = pygit2.Repository(sys.argv[1])
+    refs = repo.remotes['origin'].ls_remotes()
+    print('OK {} refs in {:.1f}s'.format(len(refs), time.time() - t))
+except Exception as e:
+    print('FAIL {} ({:.1f}s)'.format(e, time.time() - t))
+    sys.exit(1)
+"#;
+    let start = Instant::now();
+    let mut cmd = Command::new(&python_exe);
+    cmd.args(["-s", "-c", script.trim()]);
+    cmd.arg(&comfy_dir);
+    cmd.creation_flags(0x08000000);
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+    cmd.env("PYTHONIOENCODING", "utf-8");
+    cmd.env("PYTHONUTF8", "1");
+    apply_proxy(&mut cmd, &proxy);
+    let output = cmd.output().map_err(|e| format!("Failed to run test: {}", e))?;
+    let duration_ms = start.elapsed().as_millis() as u64;
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if output.status.success() {
+        Ok(GitProxyTestResult { ok: true, message: stdout, duration_ms })
+    } else {
+        let msg = if !stdout.is_empty() { stdout } else { stderr };
+        Ok(GitProxyTestResult { ok: false, message: msg, duration_ms })
     }
 }
 
@@ -1033,6 +1116,7 @@ pub fn run() {
             read_instance_log,
             run_update,
             get_system_proxy,
+            test_git_proxy,
             get_config_path,
             open_in_explorer,
             open_url,

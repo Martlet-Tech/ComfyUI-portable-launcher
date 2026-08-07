@@ -91,15 +91,20 @@
       <div class="modal-content">
         <div class="settings-section">
           <div class="section-title">网络代理</div>
-          <label class="proxy-toggle">
-            <input type="checkbox" id="settingsProxyToggle" />
-            <span>启用系统代理 / 手动指定</span>
-          </label>
-          <div class="proxy-manual" id="settingsProxyManual" style="display:none">
-            <input type="text" id="settingsProxyHost" placeholder="127.0.0.1" class="small-input" />
-            <span>:</span>
+          <div class="proxy-row">
+            <select id="settingsProxyType" class="proxy-type">
+              <option value="none">无</option>
+              <option value="system">系统代理</option>
+              <option value="socks5">TCP (SOCKS5)</option>
+              <option value="http">HTTP(S)</option>
+            </select>
+            <input type="text" id="settingsProxyIp" placeholder="127.0.0.1" class="small-input" />
+            <span class="proxy-colon">:</span>
             <input type="number" id="settingsProxyPort" placeholder="7890" class="small-input port-input" />
+            <button id="testProxyBtn" class="test-proxy-btn" disabled>测试</button>
           </div>
+          <div id="proxyHint" class="proxy-hint"></div>
+          <div id="proxyTestResult" class="proxy-test-result"></div>
         </div>
         <div class="settings-section">
           <div class="section-title">配置路径</div>

@@ -37,6 +37,9 @@ const instanceService = {
   async runUpdate(params) {
     return await invoke('run_update', params);
   },
+  async testGitProxy(params) {
+    return await invoke('test_git_proxy', params);
+  },
   async rebuildTrayMenu() {
     await invoke('rebuild_tray_menu');
   },
@@ -317,46 +320,126 @@ function createInstanceDetail(container, handlers) {
   return { render, setPathError, setLaunchEnabled };
 }
 
-function createSettingsModal(handlers) {
+function createSettingsModal() {
   const modal = document.getElementById('settingsModal');
   const backdrop = modal.querySelector('.modal-backdrop');
   const closeBtn = modal.querySelector('.modal-close');
   const configPathDisplay = document.getElementById('configPathDisplay');
-  const proxyToggle = document.getElementById('settingsProxyToggle');
-  const proxyManual = document.getElementById('settingsProxyManual');
-  const proxyHost = document.getElementById('settingsProxyHost');
-  const proxyPort = document.getElementById('settingsProxyPort');
+  const typeSelect = document.getElementById('settingsProxyType');
+  const ipInput = document.getElementById('settingsProxyIp');
+  const portInput = document.getElementById('settingsProxyPort');
+  const testBtn = document.getElementById('testProxyBtn');
+  const hintEl = document.getElementById('proxyHint');
+  const resultEl = document.getElementById('proxyTestResult');
 
-  proxyToggle.addEventListener('change', () => {
-    if (proxyToggle.checked) {
-      proxyManual.style.display = 'flex';
+  const DEFAULT_IP = '127.0.0.1';
+  const DEFAULT_PORT = 7890;
+  let sysProxy = null;
+  let testing = false;
+
+  function updateManualEnabled(type) {
+    const editable = type === 'socks5' || type === 'http';
+    ipInput.disabled = !editable;
+    portInput.disabled = !editable;
+  }
+
+  function updateHint(type) {
+    if (type === 'system') {
+      hintEl.textContent = sysProxy
+        ? `将使用系统代理 ${sysProxy.host}:${sysProxy.port}`
+        : '未检测到系统代理, 将直连';
+    } else if (type === 'socks5') {
+      hintEl.textContent = 'SOCKS5 代理 (TCP)';
+    } else if (type === 'http') {
+      hintEl.textContent = 'HTTP / HTTPS 代理';
     } else {
-      proxyManual.style.display = 'none';
+      hintEl.textContent = '';
     }
-    handlers.onProxyChange({
-      enabled: proxyToggle.checked,
-      host: proxyHost.value || null,
-      port: proxyPort.value ? parseInt(proxyPort.value) : null,
-    });
+  }
+
+  function saveProxy() {
+    state.proxy = {
+      type: typeSelect.value,
+      ip: ipInput.value.trim() || null,
+      port: portInput.value ? parseInt(portInput.value) : null,
+    };
+    saveConfig();
+  }
+
+  function updateTestBtn() {
+    const inst = state.config.instances.find(i => i.id === state.selectedId);
+    testBtn.disabled = testing || !inst || typeSelect.value === 'none';
+  }
+
+  async function refreshSystemProxy() {
+    try {
+      sysProxy = await configService.getSystemProxy();
+    } catch (_) {
+      sysProxy = null;
+    }
+  }
+
+  typeSelect.addEventListener('change', () => {
+    const type = typeSelect.value;
+    updateManualEnabled(type);
+    if (type === 'socks5' || type === 'http') {
+      if (!ipInput.value) ipInput.value = DEFAULT_IP;
+      if (!portInput.value) portInput.value = DEFAULT_PORT;
+    }
+    updateHint(type);
+    updateTestBtn();
+    saveProxy();
   });
-  proxyHost.addEventListener('input', () => {
-    handlers.onProxyChange({
-      enabled: proxyToggle.checked,
-      host: proxyHost.value || null,
-      port: proxyPort.value ? parseInt(proxyPort.value) : null,
-    });
+
+  ipInput.addEventListener('input', () => {
+    saveProxy();
+    updateTestBtn();
   });
-  proxyPort.addEventListener('input', () => {
-    handlers.onProxyChange({
-      enabled: proxyToggle.checked,
-      host: proxyHost.value || null,
-      port: proxyPort.value ? parseInt(proxyPort.value) : null,
-    });
+
+  portInput.addEventListener('input', () => {
+    saveProxy();
+    updateTestBtn();
+  });
+
+  testBtn.addEventListener('click', async () => {
+    if (testing) return;
+    testing = true;
+    updateTestBtn();
+    resultEl.className = 'proxy-test-result test-loading';
+    resultEl.textContent = '测试中...';
+    try {
+      const inst = state.config.instances.find(i => i.id === state.selectedId);
+      if (!inst) throw new Error('无可用实例');
+      const proxy = await resolveProxy();
+      if (!proxy) {
+        resultEl.className = 'proxy-test-result test-fail';
+        resultEl.textContent = '✗ 无可用代理配置, 无法测试';
+        return;
+      }
+      const res = await instanceService.testGitProxy({ path: inst.path, proxy });
+      const secs = (res.duration_ms / 1000).toFixed(1);
+      if (res.ok) {
+        resultEl.className = 'proxy-test-result test-ok';
+        resultEl.textContent = `✓ 连接成功 (${secs}s)  ${res.message}`;
+      } else {
+        resultEl.className = 'proxy-test-result test-fail';
+        resultEl.textContent = `✗ 连接失败 (${secs}s)  ${res.message}`;
+      }
+    } catch (err) {
+      resultEl.className = 'proxy-test-result test-fail';
+      resultEl.textContent = '✗ ' + (typeof err === 'string' ? err : err.message || JSON.stringify(err));
+    } finally {
+      testing = false;
+      updateTestBtn();
+    }
   });
 
   function open(configPath) {
     configPathDisplay.textContent = configPath;
+    resultEl.className = 'proxy-test-result';
+    resultEl.textContent = '';
     modal.classList.remove('hidden');
+    refreshSystemProxy().then(() => updateHint(typeSelect.value));
   }
 
   function close() {
@@ -364,12 +447,18 @@ function createSettingsModal(handlers) {
   }
 
   function setProxy(config) {
-    if (config) {
-      proxyToggle.checked = config.enabled;
-      if (config.host) proxyHost.value = config.host;
-      if (config.port) proxyPort.value = config.port;
-      proxyManual.style.display = config.enabled ? 'flex' : 'none';
+    if (!config) {
+      typeSelect.value = 'none';
+      ipInput.value = '';
+      portInput.value = '';
+    } else {
+      typeSelect.value = config.type || 'none';
+      ipInput.value = config.ip || '';
+      portInput.value = config.port || '';
     }
+    updateManualEnabled(typeSelect.value);
+    updateHint(typeSelect.value);
+    updateTestBtn();
   }
 
   backdrop.addEventListener('click', close);
@@ -405,7 +494,7 @@ const state = {
   config: null,
   selectedId: null,
   instanceStates: {},
-  proxy: null,
+  proxy: { type: 'none', ip: null, port: null },
   isMinimized: false,
   launchStartTime: null,
   accumulatedMs: 0,
@@ -436,9 +525,31 @@ const topbar = createTopbar({
   onRemove: handleRemove,
 });
 
-const settingsModal = createSettingsModal({ onProxyChange: handleProxyChange });
+const settingsModal = createSettingsModal({});
 const logModal = createLogModal();
 const conflictModal = createConflictModal();
+
+function migrateProxy(p) {
+  if (!p) return { type: 'none', ip: null, port: null };
+  if (p.type) return p;
+  if (!p.enabled) return { type: 'none', ip: null, port: null };
+  if (p.host && p.port) return { type: 'http', ip: p.host, port: p.port };
+  return { type: 'system', ip: null, port: null };
+}
+
+async function resolveProxy() {
+  const p = state.proxy || { type: 'none', ip: null, port: null };
+  if (p.type === 'none') return null;
+  if (p.type === 'system') {
+    return await configService.getSystemProxy();
+  }
+  if (!p.ip || !p.port) return null;
+  return {
+    host: p.ip,
+    port: p.port,
+    scheme: p.type === 'socks5' ? 'socks5' : 'http',
+  };
+}
 
 function appendLog(st, text) {
   const parts = text.replace(/\r\n/g, '\n').split('\r');
@@ -496,7 +607,11 @@ function setupLogScrollControls() {
 
 async function init() {
   state.config = await configService.read();
-  state.proxy = state.config.proxy || { enabled: false, host: null, port: null };
+  state.proxy = migrateProxy(state.config.proxy);
+  if (state.config.proxy && !state.config.proxy.type) {
+    state.config.proxy = state.proxy;
+    await configService.write(state.config);
+  }
   settingsModal.setProxy(state.proxy);
   if (state.config.instances.length > 0) {
     state.selectedId = state.config.instances[0].id;
@@ -674,7 +789,6 @@ async function handleLaunch(id, mode) {
       inputDirectory: inst.input_directory || null,
       tempDirectory: inst.temp_directory || null,
       userDirectory: inst.user_directory || null,
-      proxy: state.proxy.enabled ? state.proxy : null,
     });
     state.instanceStates[id] = { ...state.instanceStates[id], pid };
     renderAll();
@@ -770,7 +884,7 @@ async function handleUpdate(id, type) {
       instanceId: id,
       path: inst.path,
       updateType: type,
-      proxy: state.proxy.enabled ? state.proxy : null,
+      proxy: await resolveProxy(),
     });
     appendLog(st, '✓ 更新完成\n');
   } catch (err) {
@@ -843,11 +957,6 @@ async function handleSelectFolder(id, key) {
 function handleSettings() {
   const el = document.getElementById('configPathDisplay');
   settingsModal.open(el.textContent);
-}
-
-function handleProxyChange(proxy) {
-  state.proxy = proxy;
-  saveConfig();
 }
 
 async function validateAllPaths() {

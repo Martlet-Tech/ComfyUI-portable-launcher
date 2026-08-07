@@ -1,6 +1,6 @@
 [package]
 name = "comfyui-portable-launcher"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 
 [lib]
@@ -11,7 +11,7 @@ crate-type = ["lib", "cdylib", "staticlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon"] }
+tauri = { version = "2", features = ["tray-icon", "custom-protocol"] }
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

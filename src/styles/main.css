@@ -4,9 +4,18 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 
 #topbar { display: flex; align-items: center; justify-content: space-between; padding: 8px 16px; background: #16213e; border-bottom: 1px solid #0f3460; flex-shrink: 0; }
 .topbar-left, .topbar-right { display: flex; align-items: center; gap: 10px; }
-.proxy-toggle { display: flex; align-items: center; gap: 4px; font-size: 13px; color: #a0a0b0; cursor: pointer; }
-.proxy-toggle input { accent-color: #e94560; }
-.proxy-manual { display: flex; align-items: center; gap: 4px; }
+.proxy-row { display: flex; align-items: center; gap: 6px; }
+.proxy-type { background: #0f3460; border: 1px solid #1a3a6a; color: #e0e0e0; padding: 2px 6px; border-radius: 3px; font-size: 12px; }
+.proxy-colon { color: #888; }
+.proxy-hint { font-size: 11px; color: #888; margin-top: 6px; min-height: 14px; }
+.proxy-test-result { font-size: 12px; margin-top: 6px; min-height: 16px; white-space: pre-wrap; word-break: break-all; }
+.proxy-test-result.test-ok { color: #2ecc71; }
+.proxy-test-result.test-fail { color: #e74c3c; }
+.proxy-test-result.test-loading { color: #f39c12; }
+.test-proxy-btn { background: #0f3460; border: 1px solid #1a3a6a; color: #e0e0e0; padding: 2px 10px; border-radius: 3px; font-size: 12px; cursor: pointer; }
+.test-proxy-btn:hover:not(:disabled) { background: #1a3a6a; }
+.test-proxy-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.small-input:disabled { opacity: 0.4; }
 .small-input { background: #0f3460; border: 1px solid #1a3a6a; color: #e0e0e0; padding: 2px 6px; border-radius: 3px; font-size: 12px; width: 100px; }
 .port-input { width: 80px !important; }
 
@@ -90,7 +99,6 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 
 .settings-section { margin-bottom: 20px; }
 .settings-section .section-title { margin-bottom: 12px; }
-.settings-section .proxy-toggle { margin-bottom: 8px; }
 
 button:focus-visible { outline: 2px solid #e94560; outline-offset: 2px; }
 
