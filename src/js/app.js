@@ -3,6 +3,9 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
 import ansiLog from './ansiLog.js';
 
+const LAUNCH_MODES = ['gpu', 'cpu', 'gpu_fastfp16'];
+const MODE_LABELS = { gpu: 'GPU', cpu: 'CPU', gpu_fastfp16: 'GPU Fast FP16' };
+
 const configService = {
   async read() {
     return await invoke('read_config');
@@ -60,6 +63,19 @@ const instanceService = {
   },
 };
 
+function escapeHtml(s) {
+  if (s === null || s === undefined) return '';
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function isValidPort(v) {
+  if (v === null || v === undefined || String(v).trim() === '') return false;
+  const n = Number(v);
+  return Number.isInteger(n) && n >= 1 && n <= 65535;
+}
+
 function createTopbar(handlers) {
   const settingsBtn = document.getElementById('settingsBtn');
   const addBtn = document.getElementById('addBtn');
@@ -78,42 +94,52 @@ function createInstanceList(container, handlers) {
   function render(instances, selectedId, instanceStates) {
     container.innerHTML = '';
     if (!instances || instances.length === 0) {
-      container.innerHTML = '<div class="empty-hint">暂无实例，点 + 添加</div>';
+      container.innerHTML = '<div class="empty-hint">暂无实例<br />点右上角 + 添加</div>';
       return;
     }
-    for (const inst of instances) {
+    instances.forEach((inst, idx) => {
       const div = document.createElement('div');
       div.className = 'instance-item';
       const st = instanceStates[inst.id] || { status: 'stopped' };
       div.classList.add('status-' + st.status);
       if (inst.id === selectedId) div.classList.add('selected');
+      div.style.setProperty('--i', String(idx));
       const name = inst.alias || inst.path.split('\\').pop() || inst.path;
-      div.innerHTML = `<div class="name">${escapeHtml(name)}</div><div class="sub">${escapeHtml(inst.path)}</div>`;
+      div.innerHTML = `
+        <span class="state-dot"></span>
+        <div class="inst-item-main">
+          <div class="name">${escapeHtml(name)}</div>
+          <div class="sub">${escapeHtml(inst.path)}</div>
+        </div>
+        <span class="inst-item-port">${inst.port || 8188}</span>
+      `;
       div.addEventListener('click', () => handlers.onSelect(inst.id));
       container.appendChild(div);
-    }
+    });
   }
   return { render };
-}
-
-function escapeHtml(s) {
-  if (s === null || s === undefined) return '';
-  const d = document.createElement('div');
-  d.textContent = s;
-  return d.innerHTML;
 }
 
 function createInstanceDetail(container, handlers) {
   const aliasInput = document.getElementById('instanceAlias');
   const pathLabel = document.getElementById('instancePath');
   const portInput = document.getElementById('instancePort');
+  const portError = document.getElementById('portError');
   const customArgsInput = document.getElementById('customArgs');
   const argsPreview = document.getElementById('argsPreview');
   const pathRows = document.getElementById('pathRows');
-  const launchBtns = container.querySelectorAll('.launch-btn');
-  const stopBtn = container.querySelector('.stop-btn');
+  const launchBtn = document.getElementById('launchBtn');
+  const launchMode = document.getElementById('launchMode');
+  const launchModeLabel = document.getElementById('launchModeLabel');
+  const stopBtn = container.querySelector('.btn-stop');
   const openWebBtn = document.getElementById('openWebBtn');
-  const updateBtns = container.querySelectorAll('.update-btn');
+  const updateBtns = container.querySelectorAll('.btn-update');
+  const stateBadge = document.getElementById('instStateBadge');
+  const consoleSection = document.getElementById('startupLogSection');
+  const consoleHead = document.getElementById('consoleHead');
+  const consoleBody = document.getElementById('startupLogContent');
+  const consoleBadge = document.getElementById('consoleBadge');
+  const consoleToggle = document.getElementById('consoleToggle');
 
   const pathDefs = [
     { key: 'output_directory', label: 'Output 目录' },
@@ -124,11 +150,38 @@ function createInstanceDetail(container, handlers) {
 
   let currentInstance = null;
   let pathInputs = {};
+  let pathsValid = true;
+  let portsValid = true;
+  let isStartingNow = false;
 
-  launchBtns.forEach(btn => {
-    btn.addEventListener('click', () => {
-      if (currentInstance) handlers.onLaunch(currentInstance.id, btn.dataset.mode);
-    });
+  function refreshLaunchEnabled() {
+    const blocked = !pathsValid || !portsValid || isStartingNow;
+    launchBtn.disabled = blocked;
+    launchMode.disabled = blocked;
+  }
+
+  function setLaunchMode(mode) {
+    const value = LAUNCH_MODES.includes(mode) ? mode : 'gpu';
+    launchMode.value = value;
+    launchBtn.dataset.mode = value;
+    launchModeLabel.textContent = MODE_LABELS[value];
+  }
+
+  function refreshPortValidation() {
+    portsValid = isValidPort(portInput.value);
+    portInput.classList.toggle('invalid', !portsValid);
+    portError.textContent = portsValid ? '' : '端口范围 1 – 65535';
+    refreshLaunchEnabled();
+    updateArgsPreview(currentInstance);
+  }
+
+  launchBtn.addEventListener('click', () => {
+    if (currentInstance) handlers.onLaunch(currentInstance.id, launchBtn.dataset.mode || 'gpu');
+  });
+  launchMode.addEventListener('change', () => {
+    if (!currentInstance) return;
+    state.launchModes[currentInstance.id] = launchMode.value;
+    setLaunchMode(launchMode.value);
   });
   stopBtn.addEventListener('click', () => {
     if (currentInstance) handlers.onStop(currentInstance.id);
@@ -144,11 +197,18 @@ function createInstanceDetail(container, handlers) {
   aliasInput.addEventListener('change', () => {
     if (currentInstance) handlers.onAliasChange(currentInstance.id, aliasInput.value);
   });
+  portInput.addEventListener('input', refreshPortValidation);
   portInput.addEventListener('change', () => {
-    if (currentInstance) {
-      handlers.onPortChange(currentInstance.id, parseInt(portInput.value) || 8188);
-      updateArgsPreview(currentInstance);
+    if (!currentInstance) return;
+    if (!isValidPort(portInput.value)) {
+      portInput.value = currentInstance.port || 8188;
+      refreshPortValidation();
+      return;
     }
+    const port = parseInt(portInput.value, 10);
+    currentInstance.port = port;
+    handlers.onPortChange(currentInstance.id, port);
+    updateArgsPreview(currentInstance);
   });
   customArgsInput.addEventListener('change', () => {
     if (currentInstance) {
@@ -186,6 +246,27 @@ function createInstanceDetail(container, handlers) {
     }
   });
 
+  consoleHead.addEventListener('click', () => {
+    if (!currentInstance) return;
+    const st = state.instanceStates[currentInstance.id];
+    if (!st) return;
+    st.consoleCollapsed = !st.consoleCollapsed;
+    if (!st.consoleCollapsed) st.consoleUnread = false;
+    renderConsole(st);
+    if (!st.consoleCollapsed) consoleBody.scrollTop = consoleBody.scrollHeight;
+  });
+
+  function renderConsole(st) {
+    const show = !!(st && (st.log || st.status === 'starting' || st.updating));
+    consoleSection.classList.toggle('hidden', !show);
+    if (!show) return;
+    consoleSection.classList.toggle('collapsed', !!st.consoleCollapsed);
+    consoleSection.classList.toggle('running', st.status === 'running');
+    consoleToggle.setAttribute('aria-expanded', String(!st.consoleCollapsed));
+    consoleBadge.classList.toggle('hidden', !(st.consoleCollapsed && st.consoleUnread));
+    consoleBody.innerHTML = st.logHtml || '';
+  }
+
   function render(instance, instanceStates) {
     helpTooltip.classList.add('hidden');
     currentInstance = instance;
@@ -200,30 +281,41 @@ function createInstanceDetail(container, handlers) {
     const isRunning = st.status === 'running';
     const isStarting = st.status === 'starting';
     const isUpdating = st.updating === true;
-    launchBtns.forEach(b => b.classList.toggle('hidden', isRunning || isStarting));
+
+    setLaunchMode(state.launchModes[instance.id] || 'gpu');
+    isStartingNow = isStarting;
+    launchBtn.classList.toggle('hidden', isRunning || isStarting);
+    launchMode.classList.toggle('hidden', isRunning || isStarting);
     stopBtn.classList.toggle('hidden', !isRunning);
     openWebBtn.classList.toggle('hidden', !isRunning);
-    launchBtns.forEach(b => b.disabled = isStarting);
+    refreshLaunchEnabled();
     updateBtns.forEach(b => b.disabled = isStarting || isRunning || isUpdating);
-    renderPathRows(instance);
 
-    const logSection = document.getElementById('startupLogSection');
-    const logContent = document.getElementById('startupLogContent');
-    const log = st.log || '';
-    if (log || isStarting || isUpdating) {
-      const wasHidden = logSection.classList.contains('hidden');
-      logSection.classList.remove('hidden');
-      if (wasHidden && st.autoScroll === false) st.autoScroll = true;
-      logContent.innerHTML = st.logHtml || '';
-      scrollLogIfPinned(logContent, st);
-    } else {
-      logSection.classList.add('hidden');
+    let badgeState = 'stopped';
+    let badgeLabel = '已停止';
+    if (isUpdating) {
+      badgeState = 'starting';
+      badgeLabel = '更新中';
+    } else if (isRunning) {
+      badgeState = 'running';
+      badgeLabel = '运行中';
+    } else if (isStarting) {
+      badgeState = 'starting';
+      badgeLabel = '启动中';
     }
+    stateBadge.className = 'state-badge state-' + badgeState;
+    stateBadge.textContent = badgeLabel;
+
+    renderPathRows(instance);
+    refreshPortValidation();
+    renderConsole(st);
+    if (st.autoScroll !== false) consoleBody.scrollTop = consoleBody.scrollHeight;
   }
 
-  function buildArgsPreview(inst) {
+  function buildArgsPreview(inst, portOverride) {
+    const port = portOverride !== undefined ? portOverride : (inst.port || 8188);
     const mainPy = inst.path + '\\ComfyUI\\main.py';
-    const parts = ['-s', mainPy, '--windows-standalone-build', '--port', String(inst.port || 8188)];
+    const parts = ['-s', mainPy, '--windows-standalone-build', '--port', String(port)];
     const dirs = [
       ['--output-directory', inst.output_directory],
       ['--input-directory', inst.input_directory],
@@ -242,8 +334,12 @@ function createInstanceDetail(container, handlers) {
   }
 
   function updateArgsPreview(instance) {
-    if (!instance) { argsPreview.textContent = ''; return; }
-    argsPreview.textContent = buildArgsPreview(instance);
+    if (!instance) {
+      argsPreview.textContent = '';
+      return;
+    }
+    const portOverride = isValidPort(portInput.value) ? parseInt(portInput.value, 10) : undefined;
+    argsPreview.textContent = buildArgsPreview(instance, portOverride);
   }
 
   function renderPathRows(instance) {
@@ -254,7 +350,7 @@ function createInstanceDetail(container, handlers) {
     instRow.className = 'path-row';
     instRow.innerHTML = `
       <span class="path-title">实例目录</span>
-      <input type="text" id="path_instance_path" value="${escapeHtml(instance.path)}" />
+      <input type="text" class="input" id="path_instance_path" value="${escapeHtml(instance.path)}" />
       <button class="folder-btn" data-key="instance_path">选择</button>
       <button class="open-btn" data-key="instance_path">打开</button>
     `;
@@ -284,7 +380,7 @@ function createInstanceDetail(container, handlers) {
       row.className = 'path-row';
       row.innerHTML = `
         <span class="path-title">${def.label}</span>
-        <input type="text" id="path_${def.key}" value="${escapeHtml(val)}" />
+        <input type="text" class="input" id="path_${def.key}" value="${escapeHtml(val)}" />
         <button class="folder-btn" data-key="${def.key}">选择</button>
         ${val ? '<button class="open-btn" data-key="' + def.key + '">打开</button>' : ''}
       `;
@@ -313,11 +409,12 @@ function createInstanceDetail(container, handlers) {
     if (input) input.classList.toggle('path-error', hasError);
   }
 
-  function setLaunchEnabled(enabled) {
-    launchBtns.forEach(b => b.disabled = !enabled);
+  function setPathsValid(valid) {
+    pathsValid = valid;
+    refreshLaunchEnabled();
   }
 
-  return { render, setPathError, setLaunchEnabled };
+  return { render, setPathError, setPathsValid };
 }
 
 function createSettingsModal() {
@@ -490,10 +587,46 @@ function createConflictModal() {
   return { open, close };
 }
 
+function createConfirmModal() {
+  const modal = document.getElementById('confirmModal');
+  const backdrop = modal.querySelector('.modal-backdrop');
+  const closeBtn = modal.querySelector('.modal-close');
+  const titleEl = document.getElementById('confirmTitle');
+  const msgEl = document.getElementById('confirmMsg');
+  const okBtn = document.getElementById('confirmOk');
+  const cancelBtn = document.getElementById('confirmCancel');
+  let resolver = null;
+
+  function settle(value) {
+    modal.classList.add('hidden');
+    if (resolver) {
+      const r = resolver;
+      resolver = null;
+      r(value);
+    }
+  }
+
+  function ask(title, message, okLabel) {
+    titleEl.textContent = title;
+    msgEl.textContent = message;
+    okBtn.textContent = okLabel || '确定';
+    modal.classList.remove('hidden');
+    okBtn.focus();
+    return new Promise(r => { resolver = r; });
+  }
+
+  backdrop.addEventListener('click', () => settle(false));
+  closeBtn.addEventListener('click', () => settle(false));
+  cancelBtn.addEventListener('click', () => settle(false));
+  okBtn.addEventListener('click', () => settle(true));
+  return { ask };
+}
+
 const state = {
   config: null,
   selectedId: null,
   instanceStates: {},
+  launchModes: {},
   proxy: { type: 'none', ip: null, port: null },
   isMinimized: false,
   launchStartTime: null,
@@ -525,9 +658,10 @@ const topbar = createTopbar({
   onRemove: handleRemove,
 });
 
-const settingsModal = createSettingsModal({});
+const settingsModal = createSettingsModal();
 const logModal = createLogModal();
 const conflictModal = createConflictModal();
+const confirmModal = createConfirmModal();
 
 function migrateProxy(p) {
   if (!p) return { type: 'none', ip: null, port: null };
@@ -586,6 +720,22 @@ function isNearLogBottom(el) {
   return el.scrollTop + el.clientHeight >= el.scrollHeight - 4;
 }
 
+function syncConsoleLog(instanceId) {
+  if (instanceId !== state.selectedId) return;
+  const st = state.instanceStates[instanceId];
+  if (!st) return;
+  const el = document.getElementById('startupLogContent');
+  const badge = document.getElementById('consoleBadge');
+  if (el) {
+    el.innerHTML = st.logHtml || '';
+    if (st.consoleCollapsed) {
+      st.consoleUnread = true;
+    }
+    scrollLogIfPinned(el, st);
+  }
+  if (badge) badge.classList.toggle('hidden', !(st.consoleCollapsed && st.consoleUnread));
+}
+
 function setupLogScrollControls() {
   const el = document.getElementById('startupLogContent');
   el.addEventListener('scroll', () => {
@@ -599,7 +749,11 @@ function setupLogScrollControls() {
     if (!section || section.classList.contains('hidden')) return;
     if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
     const st = state.instanceStates[state.selectedId];
-    if (st) st.autoScroll = true;
+    if (st) {
+      st.autoScroll = true;
+      st.consoleCollapsed = false;
+      st.consoleUnread = false;
+    }
     e.preventDefault();
     el.scrollTop = el.scrollHeight;
   });
@@ -616,7 +770,9 @@ async function init() {
   if (state.config.instances.length > 0) {
     state.selectedId = state.config.instances[0].id;
   }
+  listEl.classList.add('boot-seq');
   renderAll();
+  window.setTimeout(() => listEl.classList.remove('boot-seq'), 900);
   validateAllPaths();
   if (state.selectedId) {
     const inst = state.config.instances.find(i => i.id === state.selectedId);
@@ -631,13 +787,7 @@ async function init() {
     if (!st) return;
     appendLog(st, line + '\n');
     if (st.status === 'starting') armWatchdog(instance_id);
-    if (instance_id === state.selectedId) {
-      const el = document.getElementById('startupLogContent');
-      if (el) {
-        el.innerHTML = st.logHtml || '';
-        scrollLogIfPinned(el, st);
-      }
-    }
+    syncConsoleLog(instance_id);
   });
 
   await listen('update-log', (event) => {
@@ -645,20 +795,14 @@ async function init() {
     const st = state.instanceStates[instance_id];
     if (!st) return;
     appendLog(st, line + '\n');
-    if (instance_id === state.selectedId) {
-      const el = document.getElementById('startupLogContent');
-      if (el) {
-        el.innerHTML = st.logHtml || '';
-        scrollLogIfPinned(el, st);
-      }
-    }
+    syncConsoleLog(instance_id);
   });
 
   await listen('process-ready', (event) => {
     const { instance_id, pid } = event.payload;
     const st = state.instanceStates[instance_id];
     if (st && (st.status === 'starting' || st.status === 'running')) {
-      state.instanceStates[instance_id] = { ...st, status: 'running', pid };
+      state.instanceStates[instance_id] = { ...st, status: 'running', pid, consoleCollapsed: true, consoleUnread: false };
       renderAll();
       minimizeApp();
     }
@@ -670,7 +814,7 @@ async function init() {
     if (st && (st.status === 'starting' || st.status === 'running')) {
       clearWatchdog(instance_id);
       const wasRunning = st.status === 'running';
-      state.instanceStates[instance_id] = { ...st, status: 'stopped', pid: null };
+      state.instanceStates[instance_id] = { ...st, status: 'stopped', pid: null, consoleCollapsed: false };
       renderAll();
       if (wasRunning) {
         conflictModal.open(`ComfyUI 进程已退出 (exit code: ${exit_code})`);
@@ -728,7 +872,16 @@ async function handleAdd() {
     temp_directory: null,
     user_directory: null,
   });
-  state.instanceStates[id] = { status: 'stopped', pid: null, log: '', logHtml: '', ansiState: { ...ansiLog.defaultState } };
+  state.launchModes[id] = 'gpu';
+  state.instanceStates[id] = {
+    status: 'stopped',
+    pid: null,
+    log: '',
+    logHtml: '',
+    ansiState: { ...ansiLog.defaultState },
+    consoleCollapsed: false,
+    consoleUnread: false,
+  };
   state.selectedId = id;
   await saveConfig();
   renderAll();
@@ -740,14 +893,21 @@ async function handleRemove() {
   if (idx === -1) return;
   const inst = state.config.instances[idx];
   const st = state.instanceStates[inst.id];
+  const name = inst.alias || inst.path.split('\\').pop() || inst.path;
+  const runningNote = st && st.status === 'running' ? '\n\n该实例正在运行，移除前会先将其停止。' : '';
+  const ok = await confirmModal.ask(
+    '删除实例',
+    `确定要移除「${name}」吗？${runningNote}\n\n只删除启动器中的这条记录，磁盘上的文件不会被删除。`,
+    '删除'
+  );
+  if (!ok) return;
   if (st && st.status === 'running') {
     await handleStop(inst.id);
   }
   clearWatchdog(inst.id);
   state.config.instances.splice(idx, 1);
   delete state.instanceStates[inst.id];
-  const logSection = document.getElementById('startupLogSection');
-  if (logSection) logSection.classList.add('hidden');
+  delete state.launchModes[inst.id];
   state.selectedId = state.config.instances.length > 0
     ? state.config.instances[Math.min(idx, state.config.instances.length - 1)].id
     : null;
@@ -776,7 +936,16 @@ async function handleLaunch(id, mode) {
     conflictModal.open(`端口 ${port} 已被其他实例或程序占用。请修改端口后再试。`);
     return;
   }
-  state.instanceStates[id] = { status: 'starting', pid: null, log: '', logHtml: '', ansiState: { ...ansiLog.defaultState }, watchdog: null };
+  state.instanceStates[id] = {
+    status: 'starting',
+    pid: null,
+    log: '',
+    logHtml: '',
+    ansiState: { ...ansiLog.defaultState },
+    consoleCollapsed: false,
+    consoleUnread: false,
+    watchdog: null,
+  };
   renderAll();
   try {
     const pid = await instanceService.launchInstance({
@@ -798,7 +967,7 @@ async function handleLaunch(id, mode) {
   } catch (err) {
     clearWatchdog(id);
     const prev = state.instanceStates[id] || {};
-    state.instanceStates[id] = { ...prev, status: 'stopped', pid: null };
+    state.instanceStates[id] = { ...prev, status: 'stopped', pid: null, consoleCollapsed: false };
     renderAll();
     conflictModal.open(`启动失败: ${err}`);
   }
@@ -837,6 +1006,7 @@ function onWatchdogTimeout(id) {
   if (!st || st.status !== 'starting') return;
   st.watchdog = null;
   appendLog(st, `[警告] 启动超时: 进程 ${STARTUP_TIMEOUT_MS / 1000} 秒无输出, 仍在等待...\n`);
+  st.consoleCollapsed = false;
   renderAll();
   conflictModal.open(`启动超时: 进程 ${STARTUP_TIMEOUT_MS / 1000} 秒无输出。\n\n后台进程仍在继续追踪, 若恢复输出并启动成功将自动变为运行中。`);
 }
@@ -847,7 +1017,7 @@ async function pollPort(id, port) {
     const st = state.instanceStates[id];
     if (!st || st.status !== 'starting') return;
     if (await instanceService.checkPort(port)) {
-      state.instanceStates[id] = { ...st, status: 'running' };
+      state.instanceStates[id] = { ...st, status: 'running', consoleCollapsed: true, consoleUnread: false };
       renderAll();
       minimizeApp();
       return;
@@ -875,8 +1045,15 @@ async function handleOpenWeb(id, port) {
 async function handleUpdate(id, type) {
   const inst = state.config.instances.find(i => i.id === id);
   if (!inst) return;
-  const st = state.instanceStates[id] || (state.instanceStates[id] = { status: 'stopped', log: '', logHtml: '', ansiState: { ...ansiLog.defaultState } });
+  const st = state.instanceStates[id] || (state.instanceStates[id] = {
+    status: 'stopped',
+    log: '',
+    logHtml: '',
+    ansiState: { ...ansiLog.defaultState },
+  });
   st.updating = true;
+  st.consoleCollapsed = false;
+  st.consoleUnread = false;
   resetLog(st);
   renderAll();
   try {
@@ -990,7 +1167,7 @@ async function validatePathsForInstance(id) {
       detailComponent.setPathError(key, false);
     }
   }
-  detailComponent.setLaunchEnabled(!hasError);
+  detailComponent.setPathsValid(!hasError);
 }
 
 async function minimizeApp() {

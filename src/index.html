@@ -4,80 +4,153 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ComfyUI Flauncher</title>
+  <link rel="icon" href="assets/logo.png" />
   <link rel="stylesheet" href="styles/main.css" />
 </head>
 <body>
   <div id="app">
-    <div id="topbar">
-      <div class="topbar-left">
-        <button id="settingsBtn" class="icon-btn" title="系统设置">&#9881;</button>
+    <header id="topbar">
+      <div class="brand">
+        <img class="brand-mark" src="assets/logo.png" alt="" />
+        <span class="brand-name">FLAUNCHER</span>
       </div>
-      <div class="topbar-right">
-        <button id="addBtn" class="icon-btn" title="添加实例">+</button>
-        <button id="removeBtn" class="icon-btn" title="删除实例" disabled>&minus;</button>
+      <div class="topbar-actions">
+        <button id="settingsBtn" class="icon-btn" title="系统设置" aria-label="系统设置">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        </button>
+        <button id="addBtn" class="icon-btn icon-btn--accent" title="添加实例" aria-label="添加实例">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        </button>
       </div>
-    </div>
+    </header>
 
     <div id="mainArea">
-      <div id="instanceList">
-        <div id="listEmpty" class="empty-hint">暂无实例，点 + 添加</div>
-      </div>
+      <aside id="instanceList">
+        <div id="listEmpty" class="empty-hint">暂无实例<br />点右上角 + 添加</div>
+      </aside>
 
-      <div id="instanceDetail" class="hidden">
-        <div class="detail-row">
-          <input type="text" id="instanceAlias" placeholder="备注别名（可选）" />
-          <span class="path-label" id="instancePath"></span>
-        </div>
+      <section id="instanceDetail" class="hidden">
+        <header class="inst-head">
+          <div class="inst-head-text">
+            <input type="text" id="instanceAlias" class="inst-alias" placeholder="未命名实例" />
+            <div class="inst-path" id="instancePath"></div>
+          </div>
+          <div class="inst-head-actions">
+            <span id="instStateBadge" class="state-badge state-stopped">已停止</span>
+            <button id="removeBtn" class="icon-btn icon-btn--danger" title="删除实例" aria-label="删除实例" disabled>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+            </button>
+          </div>
+        </header>
 
-        <div class="detail-section">
-          <div class="section-title">启动</div>
-          <div class="btn-group">
-            <button class="launch-btn" data-mode="cpu">CPU</button>
-            <button class="launch-btn primary" data-mode="gpu">GPU</button>
-            <button class="launch-btn" data-mode="gpu_fastfp16">GPU Fast FP16</button>
-            <button class="stop-btn hidden">停止</button>
-            <button id="openWebBtn" class="open-web-btn hidden" title="在浏览器中打开 ComfyUI 网页界面">打开网页</button>
+        <div class="detail-scroll">
+          <div class="detail-inner">
+            <section class="card">
+              <div class="card-head">
+                <span class="eyebrow">Launch</span>
+                <h2 class="card-title">启动</h2>
+              </div>
+              <div class="card-body">
+                <div class="launch-bar">
+                  <button id="launchBtn" class="btn btn-launch" data-mode="gpu">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+                    <span>启动</span>
+                    <span id="launchModeLabel" class="launch-mode">GPU</span>
+                  </button>
+                  <select id="launchMode" class="select select-mode" aria-label="启动模式">
+                    <option value="gpu">GPU</option>
+                    <option value="cpu">CPU</option>
+                    <option value="gpu_fastfp16">GPU Fast FP16</option>
+                  </select>
+                  <button class="btn btn-stop hidden">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
+                    <span>停止</span>
+                  </button>
+                  <button id="openWebBtn" class="btn btn-ghost hidden" title="在浏览器中打开 ComfyUI 网页界面">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+                    <span>打开网页</span>
+                  </button>
+                </div>
+                <div class="field-row">
+                  <label class="field-label" for="instancePort">端口</label>
+                  <input type="number" id="instancePort" class="input input-port" min="1" max="65535" step="1" value="8188" />
+                  <span id="portError" class="field-error"></span>
+                </div>
+              </div>
+            </section>
+
+            <section class="card">
+              <div class="card-head">
+                <span class="eyebrow">Update</span>
+                <h2 class="card-title">更新</h2>
+              </div>
+              <div class="card-body">
+                <div class="btn-row">
+                  <button class="btn btn-update" data-type="latest">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                    <span>最新版</span>
+                  </button>
+                  <button class="btn btn-update" data-type="stable">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l9 4.5v11L12 22l-9-4.5v-11L12 2z"/><polyline points="3 6.5 12 11 21 6.5"/><line x1="12" y1="11" x2="12" y2="22"/></svg>
+                    <span>稳定版</span>
+                  </button>
+                  <button class="btn btn-update" data-type="deps">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+                    <span>依赖</span>
+                  </button>
+                </div>
+              </div>
+            </section>
+
+            <section class="card">
+              <div class="card-head">
+                <span class="eyebrow">Directories</span>
+                <h2 class="card-title">路径</h2>
+              </div>
+              <div class="card-body">
+                <div id="pathRows"></div>
+              </div>
+            </section>
+
+            <section class="card">
+              <div class="card-head">
+                <span class="eyebrow">Arguments</span>
+                <h2 class="card-title">
+                  自定义参数
+                  <button class="help-btn" id="helpBtn" title="查看所有可用参数" aria-label="查看所有可用参数">?</button>
+                </h2>
+              </div>
+              <div class="card-body">
+                <input type="text" id="customArgs" class="input" placeholder="--force-fp16 --highvram" />
+                <pre id="argsPreview" class="args-preview"></pre>
+                <div id="helpTooltip" class="help-tooltip hidden">
+                  <div class="help-tooltip-header">
+                    <span class="eyebrow">Reference</span>
+                    <span>ComfyUI 参数列表</span>
+                  </div>
+                  <pre id="helpContent" class="help-content"></pre>
+                  <div class="help-tooltip-footer">点击任意位置关闭</div>
+                </div>
+              </div>
+            </section>
           </div>
         </div>
 
-        <div class="detail-section">
-          <div class="section-title">更新</div>
-          <div class="btn-group">
-            <button class="update-btn" data-type="latest">最新版</button>
-            <button class="update-btn" data-type="stable">稳定版</button>
-            <button class="update-btn" data-type="deps">依赖</button>
+        <section id="startupLogSection" class="console hidden">
+          <header class="console-head" id="consoleHead">
+            <span class="console-pulse"></span>
+            <span class="eyebrow">Console</span>
+            <span class="console-title">运行日志</span>
+            <span id="consoleBadge" class="console-badge hidden">新</span>
+            <button id="consoleToggle" class="console-toggle" aria-label="展开或收起日志" aria-expanded="false">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+          </header>
+          <div class="console-body">
+            <pre id="startupLogContent"></pre>
           </div>
-        </div>
-
-        <div class="detail-section">
-          <div class="section-title">端口</div>
-          <input type="number" id="instancePort" value="8188" class="port-input" />
-        </div>
-
-        <div class="detail-section">
-          <div class="section-title">路径</div>
-          <div id="pathRows"></div>
-        </div>
-
-        <div class="detail-section">
-          <div class="section-title">
-            自定义参数
-            <button class="help-btn" id="helpBtn" title="查看所有可用参数">?</button>
-          </div>
-          <input type="text" id="customArgs" placeholder="--force-fp16 --highvram" />
-          <pre id="argsPreview" class="args-preview"></pre>
-          <div id="helpTooltip" class="help-tooltip hidden">
-            <div class="help-tooltip-header">ComfyUI 参数列表</div>
-            <pre id="helpContent" class="help-content"></pre>
-            <div class="help-tooltip-footer">点击任意位置关闭</div>
-          </div>
-        </div>
-
-        <div id="startupLogSection" class="detail-section hidden">
-          <div class="section-title">运行日志</div>
-          <pre id="startupLogContent"></pre>
-        </div>
-      </div>
+        </section>
+      </section>
     </div>
   </div>
 
@@ -85,31 +158,64 @@
     <div class="modal-backdrop"></div>
     <div class="modal-body">
       <div class="modal-header">
-        <span>系统设置</span>
-        <button class="icon-btn modal-close">&times;</button>
+        <div class="modal-header-text">
+          <span class="eyebrow">Settings</span>
+          <span class="modal-title">系统设置</span>
+        </div>
+        <button class="icon-btn modal-close" aria-label="关闭">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
       </div>
       <div class="modal-content">
         <div class="settings-section">
-          <div class="section-title">网络代理</div>
+          <div class="card-head">
+            <span class="eyebrow">Network</span>
+            <span class="card-title">网络代理</span>
+          </div>
           <div class="proxy-row">
-            <select id="settingsProxyType" class="proxy-type">
+            <select id="settingsProxyType" class="select proxy-type">
               <option value="none">无</option>
               <option value="system">系统代理</option>
               <option value="socks5">TCP (SOCKS5)</option>
               <option value="http">HTTP(S)</option>
             </select>
-            <input type="text" id="settingsProxyIp" placeholder="127.0.0.1" class="small-input" />
+            <input type="text" id="settingsProxyIp" placeholder="127.0.0.1" class="input small-input" />
             <span class="proxy-colon">:</span>
-            <input type="number" id="settingsProxyPort" placeholder="7890" class="small-input port-input" />
-            <button id="testProxyBtn" class="test-proxy-btn" disabled>测试</button>
+            <input type="number" id="settingsProxyPort" placeholder="7890" class="input small-input port-input" />
+            <button id="testProxyBtn" class="btn btn-ghost btn-sm" disabled>测试</button>
           </div>
           <div id="proxyHint" class="proxy-hint"></div>
           <div id="proxyTestResult" class="proxy-test-result"></div>
         </div>
         <div class="settings-section">
-          <div class="section-title">配置路径</div>
-          <p><span id="configPathDisplay"></span></p>
+          <div class="card-head">
+            <span class="eyebrow">Storage</span>
+            <span class="card-title">配置路径</span>
+          </div>
+          <p class="config-path"><span id="configPathDisplay"></span></p>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="confirmModal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-body confirm-modal">
+      <div class="modal-header">
+        <div class="modal-header-text">
+          <span class="eyebrow">Confirm</span>
+          <span class="modal-title" id="confirmTitle">确认操作</span>
+        </div>
+        <button class="icon-btn modal-close" aria-label="关闭">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="modal-content">
+        <p id="confirmMsg" class="confirm-msg"></p>
+      </div>
+      <div class="modal-footer">
+        <button id="confirmCancel" class="btn btn-ghost btn-sm">取消</button>
+        <button id="confirmOk" class="btn btn-danger btn-sm">确定</button>
       </div>
     </div>
   </div>
@@ -118,11 +224,16 @@
     <div class="modal-backdrop"></div>
     <div class="modal-body log-modal">
       <div class="modal-header">
-        <span>日志输出</span>
-        <button class="icon-btn modal-close">&times;</button>
+        <div class="modal-header-text">
+          <span class="eyebrow">Output</span>
+          <span class="modal-title">日志输出</span>
+        </div>
+        <button class="icon-btn modal-close" aria-label="关闭">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
       </div>
       <div class="modal-content">
-        <pre id="logContent"></pre>
+        <pre id="logContent" class="log-content"></pre>
       </div>
     </div>
   </div>
@@ -131,8 +242,13 @@
     <div class="modal-backdrop"></div>
     <div class="modal-body conflict-modal">
       <div class="modal-header">
-        <span>端口冲突</span>
-        <button class="icon-btn modal-close">&times;</button>
+        <div class="modal-header-text">
+          <span class="eyebrow">Blocked</span>
+          <span class="modal-title">端口冲突</span>
+        </div>
+        <button class="icon-btn modal-close" aria-label="关闭">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
       </div>
       <div class="modal-content">
         <p id="portConflictMsg"></p>
