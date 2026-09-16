@@ -56,9 +56,23 @@ pub struct InstanceConfig {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct UiConfig {
+    #[serde(default)]
+    pub sidebar_collapsed: bool,
+    #[serde(default = "default_tab")]
+    pub active_tab: String,
+}
+
+fn default_tab() -> String {
+    "launch".to_string()
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AppConfig {
     pub instances: Vec<InstanceConfig>,
     pub proxy: Option<ProxyConfig>,
+    #[serde(default)]
+    pub ui: Option<UiConfig>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -232,6 +246,7 @@ fn read_config() -> Result<AppConfig, String> {
         return Ok(AppConfig {
             instances: Vec::new(),
             proxy: None,
+            ui: None,
         });
     }
     let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
@@ -1081,6 +1096,7 @@ pub fn run() {
             let empty = AppConfig {
                 instances: vec![],
                 proxy: None,
+                ui: None,
             };
             let menu = build_tray_menu(app.handle(), &empty)?;
             let mut tray = TrayIconBuilder::new().menu(&menu);

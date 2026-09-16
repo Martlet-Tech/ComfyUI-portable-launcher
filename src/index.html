@@ -25,8 +25,17 @@
     </header>
 
     <div id="mainArea">
-      <aside id="instanceList">
-        <div id="listEmpty" class="empty-hint">暂无实例<br />点右上角 + 添加</div>
+      <aside id="sidebar">
+        <div class="sidebar-head">
+          <span class="eyebrow">Instances</span>
+          <span id="sidebarCount" class="sidebar-count">0</span>
+          <button id="sidebarToggle" class="sidebar-toggle" aria-expanded="true" aria-controls="instanceList" title="收缩 / 展开实例列表">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg>
+          </button>
+        </div>
+        <div id="instanceList">
+          <div id="listEmpty" class="empty-hint">暂无实例<br />点右上角 + 添加</div>
+        </div>
       </aside>
 
       <section id="instanceDetail" class="hidden">
@@ -43,8 +52,24 @@
           </div>
         </header>
 
-        <div class="detail-scroll">
-          <div class="detail-inner">
+        <nav id="tabBar" class="tab-bar" role="tablist" aria-label="实例配置">
+          <button class="tab is-active" role="tab" data-tab="launch" aria-selected="true" aria-controls="tabPanel-launch" id="tabBtn-launch">
+            <span class="tab-dot"></span>
+            <span class="tab-text">启动和更新</span>
+          </button>
+          <button class="tab" role="tab" data-tab="paths" aria-selected="false" aria-controls="tabPanel-paths" id="tabBtn-paths" tabindex="-1">
+            <span class="tab-dot"></span>
+            <span class="tab-text">路径管理</span>
+            <span id="tabBadge-paths" class="tab-badge hidden"></span>
+          </button>
+          <button class="tab" role="tab" data-tab="args" aria-selected="false" aria-controls="tabPanel-args" id="tabBtn-args" tabindex="-1">
+            <span class="tab-dot"></span>
+            <span class="tab-text">启动参数</span>
+          </button>
+        </nav>
+
+        <div class="tab-viewport">
+          <div class="tab-panel is-active" id="tabPanel-launch" role="tabpanel" aria-labelledby="tabBtn-launch" data-tab="launch">
             <section class="card">
               <div class="card-head">
                 <span class="eyebrow">Launch</span>
@@ -101,7 +126,9 @@
                 </div>
               </div>
             </section>
+          </div>
 
+          <div class="tab-panel" id="tabPanel-paths" role="tabpanel" aria-labelledby="tabBtn-paths" data-tab="paths" hidden>
             <section class="card">
               <div class="card-head">
                 <span class="eyebrow">Directories</span>
@@ -111,7 +138,9 @@
                 <div id="pathRows"></div>
               </div>
             </section>
+          </div>
 
+          <div class="tab-panel" id="tabPanel-args" role="tabpanel" aria-labelledby="tabBtn-args" data-tab="args" hidden>
             <section class="card">
               <div class="card-head">
                 <span class="eyebrow">Arguments</span>
@@ -123,17 +152,18 @@
               <div class="card-body">
                 <input type="text" id="customArgs" class="input" placeholder="--force-fp16 --highvram" />
                 <pre id="argsPreview" class="args-preview"></pre>
-                <div id="helpTooltip" class="help-tooltip hidden">
-                  <div class="help-tooltip-header">
-                    <span class="eyebrow">Reference</span>
-                    <span>ComfyUI 参数列表</span>
-                  </div>
-                  <pre id="helpContent" class="help-content"></pre>
-                  <div class="help-tooltip-footer">点击任意位置关闭</div>
-                </div>
               </div>
             </section>
           </div>
+        </div>
+
+        <div id="helpTooltip" class="help-tooltip hidden">
+          <div class="help-tooltip-header">
+            <span class="eyebrow">Reference</span>
+            <span>ComfyUI 参数列表</span>
+          </div>
+          <pre id="helpContent" class="help-content"></pre>
+          <div class="help-tooltip-footer">点击任意位置关闭</div>
         </div>
 
         <section id="startupLogSection" class="console hidden">

@@ -90,6 +90,85 @@ function createTopbar(handlers) {
   };
 }
 
+function createSidebar(handlers) {
+  const el = document.getElementById('sidebar');
+  const toggle = document.getElementById('sidebarToggle');
+  const countEl = document.getElementById('sidebarCount');
+
+  function setCollapsed(collapsed) {
+    el.classList.toggle('collapsed', collapsed);
+    toggle.setAttribute('aria-expanded', String(!collapsed));
+    toggle.title = collapsed ? '展开实例列表' : '收缩实例列表';
+  }
+
+  function toggleCollapsed() {
+    const next = !el.classList.contains('collapsed');
+    setCollapsed(next);
+    handlers.onToggle(next);
+  }
+
+  toggle.addEventListener('click', toggleCollapsed);
+  el.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !el.classList.contains('collapsed')) {
+      setCollapsed(true);
+      handlers.onToggle(true);
+    }
+  });
+
+  return {
+    setCollapsed,
+    setCount(n) { countEl.textContent = String(n); },
+    isCollapsed() { return el.classList.contains('collapsed'); },
+  };
+}
+
+function createTabBar(handlers) {
+  const nav = document.getElementById('tabBar');
+  const tabs = Array.from(nav.querySelectorAll('.tab'));
+  const panels = tabs.map(t => document.getElementById(t.getAttribute('aria-controls')));
+  let current = tabs[0].dataset.tab;
+
+  function activate(name, focus) {
+    if (!tabs.some(t => t.dataset.tab === name)) return;
+    current = name;
+    tabs.forEach((tab, i) => {
+      const on = tab.dataset.tab === name;
+      tab.classList.toggle('is-active', on);
+      tab.setAttribute('aria-selected', String(on));
+      tab.tabIndex = on ? 0 : -1;
+      panels[i].classList.toggle('is-active', on);
+      panels[i].hidden = !on;
+      if (on && focus) tab.focus();
+    });
+    handlers.onChange(name);
+  }
+
+  tabs.forEach((tab, i) => {
+    tab.addEventListener('click', () => activate(tab.dataset.tab, false));
+    tab.addEventListener('keydown', (e) => {
+      let next = null;
+      if (e.key === 'ArrowRight') next = (i + 1) % tabs.length;
+      else if (e.key === 'ArrowLeft') next = (i - 1 + tabs.length) % tabs.length;
+      else if (e.key === 'Home') next = 0;
+      else if (e.key === 'End') next = tabs.length - 1;
+      if (next === null) return;
+      e.preventDefault();
+      activate(tabs[next].dataset.tab, true);
+    });
+  });
+
+  return {
+    activate,
+    current() { return current; },
+    setBadge(name, text) {
+      const badge = document.getElementById('tabBadge-' + name);
+      if (!badge) return;
+      badge.textContent = text || '';
+      badge.classList.toggle('hidden', !text);
+    },
+  };
+}
+
 function createInstanceList(container, handlers) {
   function render(instances, selectedId, instanceStates) {
     container.innerHTML = '';
@@ -632,12 +711,30 @@ const state = {
   launchStartTime: null,
   accumulatedMs: 0,
   versionCache: {},
+  sidebarCollapsed: false,
+  activeTab: 'launch',
 };
 
 const listEl = document.getElementById('instanceList');
 const detailEl = document.getElementById('instanceDetail');
 
 const listComponent = createInstanceList(listEl, { onSelect: handleSelect });
+
+const tabBar = createTabBar({
+  onChange(name) {
+    state.activeTab = name;
+    saveUiState();
+  },
+});
+
+const sidebar = createSidebar({
+  onToggle(collapsed) {
+    state.sidebarCollapsed = collapsed;
+    saveUiState();
+  },
+});
+
+let hydratingUi = true;
 const detailComponent = createInstanceDetail(detailEl, {
   onLaunch: handleLaunch,
   onStop: handleStop,
@@ -767,6 +864,14 @@ async function init() {
     await configService.write(state.config);
   }
   settingsModal.setProxy(state.proxy);
+
+  const ui = state.config.ui || {};
+  state.sidebarCollapsed = ui.sidebar_collapsed === true;
+  state.activeTab = ui.active_tab || 'launch';
+  sidebar.setCollapsed(state.sidebarCollapsed);
+  tabBar.activate(state.activeTab, false);
+  hydratingUi = false;
+
   if (state.config.instances.length > 0) {
     state.selectedId = state.config.instances[0].id;
   }
@@ -829,6 +934,7 @@ async function init() {
 
 function renderAll() {
   listComponent.render(state.config.instances, state.selectedId, state.instanceStates);
+  sidebar.setCount(state.config.instances.length);
   if (state.selectedId) {
     const inst = state.config.instances.find(i => i.id === state.selectedId);
     if (inst) {
@@ -847,6 +953,15 @@ async function saveConfig() {
   state.config.proxy = state.proxy;
   await configService.write(state.config);
   await instanceService.rebuildTrayMenu();
+}
+
+function saveUiState() {
+  if (hydratingUi || !state.config) return;
+  state.config.ui = {
+    sidebar_collapsed: sidebar.isCollapsed(),
+    active_tab: state.activeTab,
+  };
+  saveConfig();
 }
 
 async function handleAdd() {
@@ -1168,6 +1283,7 @@ async function validatePathsForInstance(id) {
     }
   }
   detailComponent.setPathsValid(!hasError);
+  tabBar.setBadge('paths', hasError ? '!' : '');
 }
 
 async function minimizeApp() {
