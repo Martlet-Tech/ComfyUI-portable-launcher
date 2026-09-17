@@ -2,11 +2,13 @@ name: Build and Release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
 jobs:
   build:
     runs-on: windows-latest
     permissions:
       contents: write
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -32,7 +34,22 @@ jobs:
           $ver = (Get-Content src-tauri/Cargo.toml | Select-String '^version = "(.+)"$').Matches.Groups[1].Value
           $exeName = "comfyui-portable-launcher.exe"
           Compress-Archive -Path "src-tauri\target\release\$exeName" -DestinationPath "ComfyUI-portable-launcher-v$ver.zip"
-      - name: GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: ComfyUI-portable-launcher-v*.zip
+      - name: Publish release asset
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ver = (Get-Content src-tauri/Cargo.toml | Select-String '^version = "(.+)"$').Matches.Groups[1].Value
+          $tag = "v$ver"
+          $zip = (Get-Item "ComfyUI-portable-launcher-v$ver.zip").FullName
+          gh release view $tag | Out-Null
+          $exists = ($LASTEXITCODE -eq 0)
+          for ($i = 1; $i -le 3; $i++) {
+            if ($exists) { gh release upload $tag $zip --clobber }
+            else { gh release create $tag $zip --notes-from-tag }
+            if ($LASTEXITCODE -eq 0) { Write-Host "published $zip -> $tag"; exit 0 }
+            Write-Host "attempt $i failed (exit $LASTEXITCODE), retrying in 20s"
+            Start-Sleep -Seconds 20
+          }
+          Write-Error "release publish failed after 3 attempts"
+          exit 1
