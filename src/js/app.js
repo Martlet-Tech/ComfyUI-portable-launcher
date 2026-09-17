@@ -61,6 +61,15 @@ const instanceService = {
   async getGitHash(params) {
     return await invoke('get_git_hash', params);
   },
+  async getCloseAction() {
+    return await invoke('get_close_action');
+  },
+  async setCloseAction(action) {
+    await invoke('set_close_action', { action });
+  },
+  async resolveClose(action) {
+    await invoke('resolve_close', { action });
+  },
 };
 
 function escapeHtml(s) {
@@ -211,6 +220,7 @@ function createInstanceDetail(container, handlers) {
   const launchMode = document.getElementById('launchMode');
   const launchModeLabel = document.getElementById('launchModeLabel');
   const stopBtn = container.querySelector('.btn-stop');
+  const stopLabel = document.getElementById('stopBtnLabel');
   const openWebBtn = document.getElementById('openWebBtn');
   const updateBtns = container.querySelectorAll('.btn-update');
   const stateBadge = document.getElementById('instStateBadge');
@@ -365,7 +375,9 @@ function createInstanceDetail(container, handlers) {
     isStartingNow = isStarting;
     launchBtn.classList.toggle('hidden', isRunning || isStarting);
     launchMode.classList.toggle('hidden', isRunning || isStarting);
-    stopBtn.classList.toggle('hidden', !isRunning);
+    stopBtn.classList.toggle('hidden', !isRunning && !isStarting);
+    if (stopLabel) stopLabel.textContent = isStarting ? '中止启动' : '停止';
+    if (stopBtn) stopBtn.title = isStarting ? '中止当前启动并结束已创建的进程' : '停止正在运行的实例';
     openWebBtn.classList.toggle('hidden', !isRunning);
     refreshLaunchEnabled();
     updateBtns.forEach(b => b.disabled = isStarting || isRunning || isUpdating);
@@ -639,7 +651,29 @@ function createSettingsModal() {
 
   backdrop.addEventListener('click', close);
   closeBtn.addEventListener('click', close);
-  return { open, close, setProxy };
+
+  const closeActionSelect = document.getElementById('settingsCloseAction');
+  const closeActionHint = document.getElementById('closeActionHint');
+
+  const CLOSE_HINTS = {
+    ask: '关闭窗口时弹窗询问，可勾选记住选择。',
+    tray: '关闭窗口时最小化到托盘，程序继续在后台运行。',
+    exit: '关闭窗口时直接退出，并结束所有由启动器启动的实例。',
+  };
+
+  function setCloseAction(action) {
+    closeActionSelect.value = action;
+    closeActionHint.textContent = CLOSE_HINTS[action] || '';
+  }
+
+  closeActionSelect.addEventListener('change', async () => {
+    const action = closeActionSelect.value;
+    state.closeAction = action;
+    closeActionHint.textContent = CLOSE_HINTS[action] || '';
+    await instanceService.setCloseAction(action);
+  });
+
+  return { open, close, setProxy, setCloseAction };
 }
 
 function createLogModal() {
@@ -701,11 +735,58 @@ function createConfirmModal() {
   return { ask };
 }
 
+function createCloseModal() {
+  const modal = document.getElementById('closeModal');
+  const backdrop = modal.querySelector('.modal-backdrop');
+  const closeBtn = modal.querySelector('.modal-close');
+  const msgEl = document.getElementById('closeMsg');
+  const hintEl = document.getElementById('closeHint');
+  const rememberEl = document.getElementById('closeRemember');
+  const trayBtn = document.getElementById('closeTray');
+  const exitBtn = document.getElementById('closeExit');
+  const cancelBtn = document.getElementById('closeCancel');
+  let resolver = null;
+
+  function settle(value) {
+    modal.classList.add('hidden');
+    if (resolver) {
+      const r = resolver;
+      resolver = null;
+      r(value);
+    }
+  }
+
+  function ask(runningNames) {
+    if (runningNames.length > 0) {
+      msgEl.textContent = `仍有 ${runningNames.length} 个实例在运行：${runningNames.join('、')}`;
+      hintEl.textContent = '选择「退出程序」会一并结束这些实例。';
+    } else {
+      msgEl.textContent = '你要如何关闭启动器？';
+      hintEl.textContent = '选择「最小化到托盘」可让启动器继续在后台待命。';
+    }
+    rememberEl.checked = false;
+    modal.classList.remove('hidden');
+    trayBtn.focus();
+    return new Promise(r => { resolver = r; });
+  }
+
+  backdrop.addEventListener('click', () => settle(null));
+  closeBtn.addEventListener('click', () => settle(null));
+  cancelBtn.addEventListener('click', () => settle(null));
+  trayBtn.addEventListener('click', () => settle({ action: 'tray', remember: rememberEl.checked }));
+  exitBtn.addEventListener('click', () => settle({ action: 'exit', remember: rememberEl.checked }));
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !modal.classList.contains('hidden')) settle(null);
+  });
+  return { ask };
+}
+
 const state = {
   config: null,
   selectedId: null,
   instanceStates: {},
   launchModes: {},
+  launchTokens: {},
   proxy: { type: 'none', ip: null, port: null },
   isMinimized: false,
   launchStartTime: null,
@@ -713,6 +794,8 @@ const state = {
   versionCache: {},
   sidebarCollapsed: false,
   activeTab: 'launch',
+  closeAction: 'ask',
+  closePromptOpen: false,
 };
 
 const listEl = document.getElementById('instanceList');
@@ -756,6 +839,38 @@ const topbar = createTopbar({
 });
 
 const settingsModal = createSettingsModal();
+const closeModal = createCloseModal();
+function runningInstanceNames() {
+  return state.config.instances
+    .filter(i => {
+      const st = state.instanceStates[i.id];
+      return st && (st.status === 'running' || st.status === 'starting');
+    })
+    .map(i => i.alias || i.path.split('\\').pop() || i.path);
+}
+
+async function handleCloseRequest() {
+  if (state.closePromptOpen) return;
+  if (state.closeAction !== 'ask') {
+    await instanceService.resolveClose(state.closeAction);
+    return;
+  }
+  state.closePromptOpen = true;
+  const result = await closeModal.ask(runningInstanceNames());
+  state.closePromptOpen = false;
+  if (!result) {
+    if (state.isMinimized) state.isMinimized = false;
+    return;
+  }
+  if (result.remember) {
+    state.closeAction = result.action;
+    await instanceService.setCloseAction(result.action);
+    settingsModal.setCloseAction(result.action);
+  }
+  await instanceService.resolveClose(result.action);
+  if (result.action === 'tray') state.isMinimized = true;
+}
+
 const logModal = createLogModal();
 const conflictModal = createConflictModal();
 const confirmModal = createConfirmModal();
@@ -868,8 +983,10 @@ async function init() {
   const ui = state.config.ui || {};
   state.sidebarCollapsed = ui.sidebar_collapsed === true;
   state.activeTab = ui.active_tab || 'launch';
+  state.closeAction = ui.close_action || 'ask';
   sidebar.setCollapsed(state.sidebarCollapsed);
   tabBar.activate(state.activeTab, false);
+  settingsModal.setCloseAction(state.closeAction);
   hydratingUi = false;
 
   if (state.config.instances.length > 0) {
@@ -927,11 +1044,14 @@ async function init() {
     }
   });
 
+  await listen('launcher:close-requested', () => {
+    handleCloseRequest();
+  });
+
   setupLogScrollControls();
   setInterval(updateStatusBar, 1000);
   setInterval(pollStatusSnapshot, 1000);
 }
-
 function renderAll() {
   listComponent.render(state.config.instances, state.selectedId, state.instanceStates);
   sidebar.setCount(state.config.instances.length);
@@ -1051,9 +1171,12 @@ async function handleLaunch(id, mode) {
     conflictModal.open(`端口 ${port} 已被其他实例或程序占用。请修改端口后再试。`);
     return;
   }
+  const token = (state.launchTokens[id] || 0) + 1;
+  state.launchTokens[id] = token;
   state.instanceStates[id] = {
     status: 'starting',
     pid: null,
+    token,
     log: '',
     logHtml: '',
     ansiState: { ...ansiLog.defaultState },
@@ -1074,7 +1197,12 @@ async function handleLaunch(id, mode) {
       tempDirectory: inst.temp_directory || null,
       userDirectory: inst.user_directory || null,
     });
-    state.instanceStates[id] = { ...state.instanceStates[id], pid };
+    const pending = state.instanceStates[id];
+    if (!pending || pending.status !== 'starting' || pending.token !== token) {
+      await instanceService.stopInstance(pid).catch(() => {});
+      return;
+    }
+    state.instanceStates[id] = { ...pending, pid };
     renderAll();
     armWatchdog(id);
     await pollPort(id, port);
@@ -1142,15 +1270,22 @@ async function pollPort(id, port) {
 
 async function handleStop(id) {
   const st = state.instanceStates[id];
-  if (!st || !st.pid) return;
+  if (!st) return;
+  const phase = st.status;
+  if (phase !== 'running' && phase !== 'starting') return;
+  const pid = st.pid;
   clearWatchdog(id);
   if (state.launchStartTime !== null) {
     state.accumulatedMs += Date.now() - state.launchStartTime;
     state.launchStartTime = null;
   }
-  try { await instanceService.stopInstance(st.pid); } catch (_) {}
-  state.instanceStates[id] = { ...st, status: 'stopped', pid: null };
+  appendLog(st, phase === 'starting' ? '[信息] 已中止启动\n' : '[信息] 正在停止实例\n');
+  const next = phase === 'starting' ? { ...st, consoleCollapsed: false } : st;
+  state.instanceStates[id] = { ...next, status: 'stopped', pid: null };
   renderAll();
+  if (pid) {
+    try { await instanceService.stopInstance(pid); } catch (_) {}
+  }
 }
 
 async function handleOpenWeb(id, port) {

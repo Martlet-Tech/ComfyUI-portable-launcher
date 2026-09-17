@@ -77,29 +77,31 @@
               </div>
               <div class="card-body">
                 <div class="launch-bar">
-                  <button id="launchBtn" class="btn btn-launch" data-mode="gpu">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><polygon points="6 3 20 12 6 21 6 3"/></svg>
-                    <span>启动</span>
-                    <span id="launchModeLabel" class="launch-mode">GPU</span>
-                  </button>
-                  <select id="launchMode" class="select select-mode" aria-label="启动模式">
-                    <option value="gpu">GPU</option>
-                    <option value="cpu">CPU</option>
-                    <option value="gpu_fastfp16">GPU Fast FP16</option>
-                  </select>
-                  <button class="btn btn-stop hidden">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
-                    <span>停止</span>
-                  </button>
-                  <button id="openWebBtn" class="btn btn-ghost hidden" title="在浏览器中打开 ComfyUI 网页界面">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-                    <span>打开网页</span>
-                  </button>
-                </div>
-                <div class="field-row">
-                  <label class="field-label" for="instancePort">端口</label>
-                  <input type="number" id="instancePort" class="input input-port" min="1" max="65535" step="1" value="8188" />
-                  <span id="portError" class="field-error"></span>
+                  <div class="field-row">
+                    <label class="field-label" for="instancePort">端口</label>
+                    <input type="number" id="instancePort" class="input input-port" min="1" max="65535" step="1" value="8188" />
+                    <span id="portError" class="field-error"></span>
+                  </div>
+                  <div class="launch-actions">
+                    <select id="launchMode" class="select select-mode" aria-label="启动模式">
+                      <option value="gpu">GPU</option>
+                      <option value="cpu">CPU</option>
+                      <option value="gpu_fastfp16">GPU Fast FP16</option>
+                    </select>
+                    <button id="launchBtn" class="btn btn-launch" data-mode="gpu">
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+                      <span>启动</span>
+                      <span id="launchModeLabel" class="launch-mode">GPU</span>
+                    </button>
+                    <button id="openWebBtn" class="btn btn-ghost hidden" title="在浏览器中打开 ComfyUI 网页界面">
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+                      <span>打开网页</span>
+                    </button>
+                    <button class="btn btn-stop hidden">
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
+                      <span id="stopBtnLabel">停止</span>
+                    </button>
+                  </div>
                 </div>
               </div>
             </section>
@@ -219,6 +221,20 @@
         </div>
         <div class="settings-section">
           <div class="card-head">
+            <span class="eyebrow">Behavior</span>
+            <span class="card-title">关闭行为</span>
+          </div>
+          <div class="close-behavior-row">
+            <select id="settingsCloseAction" class="select close-behavior-select">
+              <option value="ask">每次询问</option>
+              <option value="tray">最小化到托盘</option>
+              <option value="exit">直接退出程序</option>
+            </select>
+          </div>
+          <div id="closeActionHint" class="proxy-hint"></div>
+        </div>
+        <div class="settings-section">
+          <div class="card-head">
             <span class="eyebrow">Storage</span>
             <span class="card-title">配置路径</span>
           </div>
@@ -282,6 +298,40 @@
       </div>
       <div class="modal-content">
         <p id="portConflictMsg"></p>
+      </div>
+    </div>
+  </div>
+
+  <div id="closeModal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-body close-modal">
+      <div class="modal-header">
+        <div class="modal-header-text">
+          <span class="eyebrow">Close</span>
+          <span class="modal-title">关闭启动器</span>
+        </div>
+        <button class="icon-btn modal-close" aria-label="关闭">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="modal-content">
+        <p class="close-msg" id="closeMsg">你要如何关闭启动器？</p>
+        <label class="close-remember">
+          <input type="checkbox" id="closeRemember" />
+          <span>记住我的选择，以后不再询问</span>
+        </label>
+        <p class="close-hint" id="closeHint"></p>
+      </div>
+      <div class="modal-footer close-footer">
+        <button id="closeCancel" class="btn btn-ghost btn-sm">取消</button>
+        <button id="closeTray" class="btn btn-sm">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v12H4z"/><polyline points="8 20 16 20"/><line x1="12" y1="16" x2="12" y2="20"/></svg>
+          <span>最小化到托盘</span>
+        </button>
+        <button id="closeExit" class="btn btn-danger btn-sm">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+          <span>退出程序</span>
+        </button>
       </div>
     </div>
   </div>

@@ -61,10 +61,16 @@ pub struct UiConfig {
     pub sidebar_collapsed: bool,
     #[serde(default = "default_tab")]
     pub active_tab: String,
+    #[serde(default = "default_close_action")]
+    pub close_action: String,
 }
 
 fn default_tab() -> String {
     "launch".to_string()
+}
+
+fn default_close_action() -> String {
+    "ask".to_string()
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -995,6 +1001,30 @@ fn build_tray_menu(app: &AppHandle, config: &AppConfig) -> Result<Menu<tauri::Wr
     builder.build()
 }
 
+pub(crate) fn shutdown(app: &AppHandle, kill_instances: bool) {
+    let state = app.state::<ProcessState>();
+    let pids: Vec<u32> = match state.0.lock() {
+        Ok(map) => map.values().map(|info| info.pid).collect(),
+        Err(_) => Vec::new(),
+    };
+    drop(state);
+    if kill_instances {
+        for pid in pids {
+            kill_process(pid);
+        }
+    }
+    let holder = app.state::<TrayHolder>();
+    let tray = match holder.0.lock() {
+        Ok(mut guard) => guard.take(),
+        Err(_) => None,
+    };
+    drop(holder);
+    if let Some(tray) = tray {
+        let _ = tray.set_visible(false);
+    }
+    app.exit(0);
+}
+
 fn handle_tray_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
     match event.id().as_ref() {
         "show" => {
@@ -1004,13 +1034,7 @@ fn handle_tray_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
             }
         }
         "exit" => {
-            let state = app.state::<ProcessState>();
-            if let Ok(map) = state.0.lock() {
-                for (_, info) in map.iter() {
-                    kill_process(info.pid);
-                }
-            }
-            app.exit(0);
+            shutdown(app, true);
         }
         id => {
             if let Ok(config) = read_config() {
@@ -1087,6 +1111,48 @@ fn handle_tray_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
     }
 }
 
+#[tauri::command]
+fn get_close_action() -> Result<String, String> {
+    Ok(read_config()?
+        .ui
+        .map(|u| u.close_action)
+        .unwrap_or_else(default_close_action))
+}
+
+#[tauri::command]
+fn set_close_action(app: AppHandle, action: String) -> Result<(), String> {
+    let mut config = read_config()?;
+    let ui = config.ui.get_or_insert(UiConfig {
+        sidebar_collapsed: false,
+        active_tab: default_tab(),
+        close_action: default_close_action(),
+    });
+    ui.close_action = action;
+    write_config(config)?;
+    let _ = app;
+    Ok(())
+}
+
+#[tauri::command]
+fn resolve_close(app: AppHandle, action: String) {
+    match action.as_str() {
+        "tray" => {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.hide();
+            }
+        }
+        "exit" => shutdown(&app, true),
+        _ => {}
+    }
+}
+
+#[tauri::command]
+fn get_tracked_pids(app: AppHandle) -> Result<Vec<u32>, String> {
+    let state = app.state::<ProcessState>();
+    let map = state.0.lock().map_err(|e| e.to_string())?;
+    Ok(map.values().map(|i| i.pid).collect())
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -1121,6 +1187,31 @@ pub fn run() {
             *app.state::<TrayHolder>().0.lock().unwrap() = Some(tray);
             Ok(())
         })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() != "main" {
+                    return;
+                }
+                let app = window.app_handle().clone();
+                let action = get_close_action().unwrap_or_else(|_| default_close_action());
+                match action.as_str() {
+                    "exit" => {
+                        shutdown(&app, true);
+                    }
+                    "tray" => {
+                        api.prevent_close();
+                        let _ = window.hide();
+                    }
+                    _ => {
+                        api.prevent_close();
+                        let _ = app.emit("launcher:close-requested", ());
+                        if let Some(w) = app.get_webview_window("main") {
+                            let _ = w.set_focus();
+                        }
+                    }
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             read_config,
             write_config,
@@ -1140,6 +1231,10 @@ pub fn run() {
             get_git_hash,
             get_status_snapshot,
             rebuild_tray_menu,
+            get_close_action,
+            set_close_action,
+            resolve_close,
+            get_tracked_pids,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
