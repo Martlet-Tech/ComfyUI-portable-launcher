@@ -72,6 +72,9 @@ const instanceService = {
   },
 };
 
+const LOG_MAX_LINES = 3000;
+const LOG_BOTTOM_EPSILON = 24;
+
 function escapeHtml(s) {
   if (s === null || s === undefined) return '';
   const d = document.createElement('div');
@@ -226,7 +229,6 @@ function createInstanceDetail(container, handlers) {
   const stateBadge = document.getElementById('instStateBadge');
   const consoleSection = document.getElementById('startupLogSection');
   const consoleHead = document.getElementById('consoleHead');
-  const consoleBody = document.getElementById('startupLogContent');
   const consoleBadge = document.getElementById('consoleBadge');
   const consoleToggle = document.getElementById('consoleToggle');
 
@@ -340,9 +342,11 @@ function createInstanceDetail(container, handlers) {
     const st = state.instanceStates[currentInstance.id];
     if (!st) return;
     st.consoleCollapsed = !st.consoleCollapsed;
-    if (!st.consoleCollapsed) st.consoleUnread = false;
+    if (!st.consoleCollapsed) {
+      st.consoleUnread = false;
+      st.autoScroll = true;
+    }
     renderConsole(st);
-    if (!st.consoleCollapsed) consoleBody.scrollTop = consoleBody.scrollHeight;
   });
 
   function renderConsole(st) {
@@ -353,7 +357,9 @@ function createInstanceDetail(container, handlers) {
     consoleSection.classList.toggle('running', st.status === 'running');
     consoleToggle.setAttribute('aria-expanded', String(!st.consoleCollapsed));
     consoleBadge.classList.toggle('hidden', !(st.consoleCollapsed && st.consoleUnread));
-    consoleBody.innerHTML = st.logHtml || '';
+    if (st.consoleCollapsed) return;
+    mountConsole(st, currentInstance.id);
+    paintConsole(st);
   }
 
   function render(instance, instanceStates) {
@@ -400,7 +406,6 @@ function createInstanceDetail(container, handlers) {
     renderPathRows(instance);
     refreshPortValidation();
     renderConsole(st);
-    if (st.autoScroll !== false) consoleBody.scrollTop = consoleBody.scrollHeight;
   }
 
   function buildArgsPreview(inst, portOverride) {
@@ -909,6 +914,8 @@ function appendLog(st, text) {
       const html = st.logHtml || '';
       const hnl = html.lastIndexOf('\n');
       st.logHtml = html.slice(0, hnl + 1);
+      st.logRenderedLen = Math.min(st.logRenderedLen || 0, st.logHtml.length);
+      st.logDropPending = true;
     } else {
       st.log = cur + seg;
     }
@@ -922,39 +929,114 @@ function resetLog(st) {
   st.log = '';
   st.logHtml = '';
   st.ansiState = { ...ansiLog.defaultState };
+  st.logRenderId = null;
+  st.logRenderedLen = 0;
+  st.curLineEl = null;
+  st.autoScroll = true;
 }
 
-function scrollLogIfPinned(el, st) {
-  if (el && st && st.autoScroll !== false) el.scrollTop = el.scrollHeight;
+function consoleScroller() {
+  return document.getElementById('consoleBodyScroll');
 }
 
-function isNearLogBottom(el) {
-  return el.scrollTop + el.clientHeight >= el.scrollHeight - 4;
+function isAtBottom(el) {
+  return el.scrollHeight - el.scrollTop - el.clientHeight <= LOG_BOTTOM_EPSILON;
+}
+
+function mountConsole(st, instanceId) {
+  if (st.logRenderId === instanceId) return;
+  const el = document.getElementById('startupLogContent');
+  if (el) el.textContent = '';
+  st.logRenderId = instanceId;
+  st.logRenderedLen = 0;
+  st.curLineEl = null;
+  if (st.autoScroll === undefined) st.autoScroll = true;
+}
+
+function appendLogLine(el, html) {
+  const line = document.createElement('span');
+  line.className = 'log-line';
+  if (html) line.innerHTML = html;
+  else line.appendChild(document.createElement('br'));
+  el.appendChild(line);
+  return line;
+}
+
+function trimConsole(el, scroller, follow) {
+  const extra = el.childElementCount - LOG_MAX_LINES;
+  if (extra <= 0) return;
+  let removed = 0;
+  for (let i = 0; i < extra; i++) {
+    const first = el.firstElementChild;
+    if (!follow) removed += first.offsetHeight;
+    el.removeChild(first);
+  }
+  if (!follow) scroller.scrollTop = Math.max(0, scroller.scrollTop - removed);
+}
+
+function dropPendingLine(el) {
+  const last = el.lastElementChild;
+  if (last && last.classList.contains('log-line-pending')) el.removeChild(last);
+}
+
+function paintConsole(st) {
+  const el = document.getElementById('startupLogContent');
+  const scroller = consoleScroller();
+  if (!el || !scroller) return;
+  if (st.logDropPending) {
+    dropPendingLine(el);
+    st.curLineEl = null;
+    st.logDropPending = false;
+  }
+  const html = st.logHtml || '';
+  const pending = html.slice(st.logRenderedLen || 0);
+  if (!pending) return;
+  st.logRenderedLen = html.length;
+  const follow = st.autoScroll !== false;
+  const segs = pending.split('\n');
+  const tail = segs.pop();
+  if (segs.length && st.curLineEl) {
+    st.curLineEl.classList.remove('log-line-pending');
+    st.curLineEl.innerHTML += segs.shift();
+    st.curLineEl = null;
+  }
+  for (const seg of segs) appendLogLine(el, seg);
+  if (tail) {
+    if (st.curLineEl) {
+      st.curLineEl.innerHTML += tail;
+    } else {
+      st.curLineEl = appendLogLine(el, tail);
+      st.curLineEl.classList.add('log-line-pending');
+    }
+  }
+  trimConsole(el, scroller, follow);
+  if (follow) scroller.scrollTop = scroller.scrollHeight;
 }
 
 function syncConsoleLog(instanceId) {
   if (instanceId !== state.selectedId) return;
   const st = state.instanceStates[instanceId];
   if (!st) return;
-  const el = document.getElementById('startupLogContent');
-  const badge = document.getElementById('consoleBadge');
-  if (el) {
-    el.innerHTML = st.logHtml || '';
-    if (st.consoleCollapsed) {
-      st.consoleUnread = true;
-    }
-    scrollLogIfPinned(el, st);
+  const section = document.getElementById('startupLogSection');
+  if (!section || section.classList.contains('hidden')) return;
+  if (st.consoleCollapsed) {
+    st.consoleUnread = true;
+    const badge = document.getElementById('consoleBadge');
+    if (badge) badge.classList.remove('hidden');
+    return;
   }
-  if (badge) badge.classList.toggle('hidden', !(st.consoleCollapsed && st.consoleUnread));
+  mountConsole(st, instanceId);
+  paintConsole(st);
 }
 
 function setupLogScrollControls() {
-  const el = document.getElementById('startupLogContent');
-  el.addEventListener('scroll', () => {
+  const scroller = consoleScroller();
+  if (!scroller) return;
+  scroller.addEventListener('scroll', () => {
     const st = state.instanceStates[state.selectedId];
     if (!st) return;
-    st.autoScroll = isNearLogBottom(el);
-  });
+    st.autoScroll = isAtBottom(scroller);
+  }, { passive: true });
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'End') return;
     const section = document.getElementById('startupLogSection');
@@ -966,8 +1048,17 @@ function setupLogScrollControls() {
       st.consoleCollapsed = false;
       st.consoleUnread = false;
     }
+    section.classList.remove('collapsed');
+    const toggle = document.getElementById('consoleToggle');
+    if (toggle) toggle.setAttribute('aria-expanded', 'true');
+    const badge = document.getElementById('consoleBadge');
+    if (badge) badge.classList.add('hidden');
+    if (st) {
+      mountConsole(st, state.selectedId);
+      paintConsole(st);
+    }
     e.preventDefault();
-    el.scrollTop = el.scrollHeight;
+    scroller.scrollTop = scroller.scrollHeight;
   });
 }
 
@@ -1153,7 +1244,10 @@ async function handleRemove() {
 function handleSelect(id) {
   state.selectedId = id;
   const st = state.instanceStates[id];
-  if (st) st.autoScroll = true;
+  if (st) {
+    st.autoScroll = true;
+    st.logRenderId = null;
+  }
   renderAll();
   validatePathsForInstance(id);
   document.getElementById('statusRight').textContent = '...';

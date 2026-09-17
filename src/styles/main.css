@@ -979,9 +979,13 @@ input:focus-visible { outline: none; }
 .console-body {
   height: clamp(96px, 22vh, 190px);
   overflow-y: auto;
+  overflow-anchor: none;
+  overscroll-behavior: contain;
   border-top: 1px solid var(--border-soft);
 }
 .console.collapsed .console-body { display: none; }
+
+.log-line { display: block; }
 
 #startupLogContent {
   padding: var(--sp-3) var(--sp-4);
