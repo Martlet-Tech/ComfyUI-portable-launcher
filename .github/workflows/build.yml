@@ -47,7 +47,11 @@ jobs:
           for ($i = 1; $i -le 3; $i++) {
             if ($exists) { gh release upload $tag $zip --clobber }
             else { gh release create $tag $zip --notes-from-tag }
-            if ($LASTEXITCODE -eq 0) { Write-Host "published $zip -> $tag"; exit 0 }
+            if ($LASTEXITCODE -eq 0) {
+              gh release edit $tag --draft=false
+              Write-Host "published $zip -> $tag"
+              exit 0
+            }
             Write-Host "attempt $i failed (exit $LASTEXITCODE), retrying in 20s"
             Start-Sleep -Seconds 20
           }
