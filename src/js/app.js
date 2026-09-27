@@ -40,6 +40,15 @@ const instanceService = {
   async runUpdate(params) {
     return await invoke('run_update', params);
   },
+  async getUpdatePatchStatus(params) {
+    return await invoke('get_update_patch_status', params);
+  },
+  async injectUpdatePatch(params) {
+    return await invoke('inject_update_patch', params);
+  },
+  async uninjectUpdatePatch(params) {
+    return await invoke('uninject_update_patch', params);
+  },
   async testGitProxy(params) {
     return await invoke('test_git_proxy', params);
   },
@@ -285,6 +294,16 @@ function createInstanceDetail(container, handlers) {
       if (currentInstance) handlers.onUpdate(currentInstance.id, btn.dataset.type);
     });
   });
+  const patchStatusEl = document.getElementById('updatePatchStatus');
+  const patchHintEl = document.getElementById('updatePatchHint');
+  const patchInjectBtn = document.getElementById('patchInjectBtn');
+  const patchRestoreBtn = document.getElementById('patchRestoreBtn');
+  patchInjectBtn.addEventListener('click', () => {
+    if (currentInstance) handlers.onPatchInject(currentInstance.id);
+  });
+  patchRestoreBtn.addEventListener('click', () => {
+    if (currentInstance) handlers.onPatchRestore(currentInstance.id);
+  });
   aliasInput.addEventListener('change', () => {
     if (currentInstance) handlers.onAliasChange(currentInstance.id, aliasInput.value);
   });
@@ -510,7 +529,33 @@ function createInstanceDetail(container, handlers) {
     refreshLaunchEnabled();
   }
 
-  return { render, setPathError, setPathsValid };
+  function setPatchStatus(status) {
+    if (!status || !status.script_exists) {
+      patchStatusEl.textContent = '未找到 update/update.py';
+      patchStatusEl.className = 'update-patch-status patch-missing';
+      patchInjectBtn.disabled = true;
+      patchRestoreBtn.disabled = true;
+      patchHintEl.textContent = status && status.script_exists ? '' : '该实例目录下没有更新脚本';
+      return;
+    }
+    patchStatusEl.className = 'update-patch-status ' + (status.patched ? 'patch-on' : 'patch-off');
+    patchStatusEl.textContent = status.patched
+      ? (status.backup_exists ? '已注入代理补丁' : '已注入代理补丁 (无备份)')
+      : (status.backup_exists ? '原版脚本 (存在备份)' : '未注入 (原版脚本)');
+    patchInjectBtn.disabled = status.patched;
+    patchRestoreBtn.disabled = !status.patched && !status.backup_exists;
+    patchHintEl.textContent = status.patched
+      ? '更新时 git 流量将走配置的网络代理'
+      : '更新脚本使用 pygit2, 不认环境变量代理; 注入后更新流量才会走代理';
+  }
+
+  function setPatchBusy(busy) {
+    patchInjectBtn.disabled = busy;
+    patchRestoreBtn.disabled = busy;
+    if (busy) patchStatusEl.textContent = '处理中...';
+  }
+
+  return { render, setPathError, setPathsValid, setPatchStatus, setPatchBusy };
 }
 
 function createSettingsModal() {
@@ -835,6 +880,8 @@ const detailComponent = createInstanceDetail(detailEl, {
   onInstancePathChange: handleInstancePathChange,
   onOpenFolder: handleOpenFolder,
   onCustomArgsChange: handleCustomArgsChange,
+  onPatchInject: handlePatchInject,
+  onPatchRestore: handlePatchRestore,
 });
 
 const topbar = createTopbar({
@@ -1087,6 +1134,7 @@ async function init() {
   renderAll();
   window.setTimeout(() => listEl.classList.remove('boot-seq'), 900);
   validateAllPaths();
+  refreshPatchStatus();
   if (state.selectedId) {
     const inst = state.config.instances.find(i => i.id === state.selectedId);
     if (inst) loadVersion(state.selectedId, inst.path);
@@ -1250,6 +1298,7 @@ function handleSelect(id) {
   }
   renderAll();
   validatePathsForInstance(id);
+  refreshPatchStatus();
   document.getElementById('statusRight').textContent = '...';
   const inst = state.config.instances.find(i => i.id === id);
   if (inst) loadVersion(id, inst.path);
@@ -1400,12 +1449,24 @@ async function handleUpdate(id, type) {
   st.consoleUnread = false;
   resetLog(st);
   renderAll();
+  const proxy = await resolveProxy();
+  if (proxy) {
+    try {
+      const ps = await instanceService.getUpdatePatchStatus({ path: inst.path });
+      if (ps.script_exists && !ps.patched) {
+        await instanceService.injectUpdatePatch({ path: inst.path });
+        appendLog(st, '[信息] 已为 update.py 注入代理补丁 (原版备份: update/update.py.orig)\n');
+      }
+    } catch (e) {
+      appendLog(st, '[警告] 代理补丁注入失败, 本次更新 git 流量将直连: ' + e + '\n');
+    }
+  }
   try {
     await instanceService.runUpdate({
       instanceId: id,
       path: inst.path,
       updateType: type,
-      proxy: await resolveProxy(),
+      proxy,
     });
     appendLog(st, '✓ 更新完成\n');
   } catch (err) {
@@ -1413,7 +1474,55 @@ async function handleUpdate(id, type) {
   } finally {
     st.updating = false;
     renderAll();
+    refreshPatchStatus();
   }
+}
+
+async function refreshPatchStatus() {
+  const inst = state.config.instances.find(i => i.id === state.selectedId);
+  if (!inst) {
+    detailComponent.setPatchStatus(null);
+    return;
+  }
+  try {
+    const st = await instanceService.getUpdatePatchStatus({ path: inst.path });
+    detailComponent.setPatchStatus(st);
+  } catch (_) {
+    detailComponent.setPatchStatus(null);
+  }
+}
+
+async function handlePatchInject(id) {
+  const inst = state.config.instances.find(i => i.id === id);
+  if (!inst) return;
+  detailComponent.setPatchBusy(true);
+  try {
+    await instanceService.injectUpdatePatch({ path: inst.path });
+  } catch (e) {
+    conflictModal.open('注入失败: ' + e);
+  }
+  await refreshPatchStatus();
+}
+
+async function handlePatchRestore(id) {
+  const inst = state.config.instances.find(i => i.id === id);
+  if (!inst) return;
+  const ok = await confirmModal.ask(
+    '还原更新脚本',
+    '将从备份 update/update.py.orig 恢复原版脚本 (备份会同时删除)。更新将不再走代理。',
+    '还原'
+  );
+  if (!ok) {
+    refreshPatchStatus();
+    return;
+  }
+  detailComponent.setPatchBusy(true);
+  try {
+    await instanceService.uninjectUpdatePatch({ path: inst.path });
+  } catch (e) {
+    conflictModal.open('还原失败: ' + e);
+  }
+  await refreshPatchStatus();
 }
 
 async function handleAliasChange(id, alias) {

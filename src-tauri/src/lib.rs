@@ -546,6 +546,136 @@ fn read_instance_log(app: AppHandle, pid: u32) -> Result<String, String> {
     }
 }
 
+const UPDATE_PATCH_BEGIN: &str = "# >>> comfylauncher-proxy-patch v1 >>>";
+const UPDATE_PATCH_END: &str = "# <<< comfylauncher-proxy-patch v1 <<<";
+const UPDATE_PATCH_CODE: &str = r#"def _cl_patch_proxy():
+    import os
+    _orig_fetch = pygit2.Remote.fetch
+    def _fetch(self, *args, **kwargs):
+        if kwargs.get('proxy') is None:
+            p = os.environ.get('HTTPS_PROXY') or os.environ.get('HTTP_PROXY') or os.environ.get('ALL_PROXY')
+            if p:
+                kwargs['proxy'] = p
+        return _orig_fetch(self, *args, **kwargs)
+    pygit2.Remote.fetch = _fetch
+_cl_patch_proxy()"#;
+
+fn update_script_paths(root: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    let update_dir = std::path::Path::new(root).join("update");
+    (update_dir.join("update.py"), update_dir.join("update.py.orig"))
+}
+
+fn split_lines(content: &str) -> Vec<String> {
+    content.lines().map(|l| l.trim_end_matches('\r').to_string()).collect()
+}
+
+fn update_patch_status_impl(root: &str) -> Result<UpdatePatchStatus, String> {
+    let (script, backup) = update_script_paths(root);
+    Ok(UpdatePatchStatus {
+        script_exists: script.exists(),
+        patched: script.exists()
+            && std::fs::read_to_string(&script)
+                .map_err(|e| e.to_string())?
+                .contains(UPDATE_PATCH_BEGIN),
+        backup_exists: backup.exists(),
+    })
+}
+
+fn inject_update_patch_impl(root: &str) -> Result<(), String> {
+    let (script, backup) = update_script_paths(root);
+    let content = std::fs::read_to_string(&script).map_err(|e| e.to_string())?;
+    if content.contains(UPDATE_PATCH_BEGIN) {
+        if !backup.exists() {
+            std::fs::copy(&script, &backup).map_err(|e| e.to_string())?;
+        }
+        return Ok(());
+    }
+    std::fs::copy(&script, &backup).map_err(|e| e.to_string())?;
+
+    let mut lines = split_lines(&content);
+    let block: Vec<String> = [UPDATE_PATCH_BEGIN, UPDATE_PATCH_CODE, UPDATE_PATCH_END]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let anchor = lines
+        .iter()
+        .position(|l| l.trim_start() == "import pygit2");
+    match anchor {
+        Some(i) => {
+            for (offset, line) in block.iter().enumerate() {
+                lines.insert(i + 1 + offset, line.clone());
+            }
+        }
+        None => {
+            let mut next = vec!["import pygit2".to_string()];
+            next.extend(block);
+            next.extend(lines);
+            lines = next;
+        }
+    }
+    let mut out = lines.join("\n");
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    std::fs::write(&script, out).map_err(|e| e.to_string())
+}
+
+fn uninject_update_patch_impl(root: &str) -> Result<(), String> {
+    let (script, backup) = update_script_paths(root);
+    if backup.exists() {
+        std::fs::copy(&backup, &script).map_err(|e| e.to_string())?;
+        std::fs::remove_file(&backup).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+    if !script.exists() {
+        return Err("update/update.py not found".to_string());
+    }
+    let content = std::fs::read_to_string(&script).map_err(|e| e.to_string())?;
+    if !content.contains(UPDATE_PATCH_BEGIN) {
+        return Err("未找到补丁或备份, 无需还原".to_string());
+    }
+    let lines = split_lines(&content);
+    let begin = lines
+        .iter()
+        .position(|l| l.contains(UPDATE_PATCH_BEGIN))
+        .ok_or("未找到补丁起始标记")?;
+    let end = lines
+        .iter()
+        .position(|l| l.contains(UPDATE_PATCH_END))
+        .ok_or("未找到补丁结束标记")?;
+    let mut out = Vec::new();
+    out.extend_from_slice(&lines[..begin]);
+    out.extend_from_slice(&lines[end + 1..]);
+    let mut out = out.join("\n");
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    std::fs::write(&script, out).map_err(|e| e.to_string())
+}
+
+#[derive(Debug, Serialize)]
+struct UpdatePatchStatus {
+    script_exists: bool,
+    patched: bool,
+    backup_exists: bool,
+}
+
+#[tauri::command]
+fn get_update_patch_status(path: String) -> Result<UpdatePatchStatus, String> {
+    update_patch_status_impl(&path)
+}
+
+#[tauri::command]
+fn inject_update_patch(path: String) -> Result<(), String> {
+    inject_update_patch_impl(&path)
+}
+
+#[tauri::command]
+fn uninject_update_patch(path: String) -> Result<(), String> {
+    uninject_update_patch_impl(&path)
+}
+
+
 #[tauri::command]
 async fn run_update(
     app: AppHandle,
@@ -646,6 +776,7 @@ async fn run_update(
             pip_cmd.stderr(Stdio::piped());
             pip_cmd.env("PYTHONIOENCODING", "utf-8");
             pip_cmd.env("PYTHONUTF8", "1");
+            apply_proxy(&mut pip_cmd, &proxy);
 
             if let Ok(mut pip_child) = pip_cmd.spawn() {
                 if let Some(ps) = pip_child.stdout.take() {
@@ -1222,6 +1353,9 @@ pub fn run() {
             check_paths,
             read_instance_log,
             run_update,
+            get_update_patch_status,
+            inject_update_patch,
+            uninject_update_patch,
             get_system_proxy,
             test_git_proxy,
             get_config_path,

@@ -126,6 +126,14 @@
                     <span>依赖</span>
                   </button>
                 </div>
+                <div class="update-patch-row">
+                  <span id="updatePatchStatus" class="update-patch-status">...</span>
+                  <span class="update-patch-actions">
+                    <button id="patchInjectBtn" class="btn btn-ghost btn-sm" title="备份原版脚本并注入代理补丁, 使更新流量走系统代理">注入代理补丁</button>
+                    <button id="patchRestoreBtn" class="btn btn-ghost btn-sm" title="从备份恢复原版 update.py">还原脚本</button>
+                  </span>
+                </div>
+                <div id="updatePatchHint" class="proxy-hint"></div>
               </div>
             </section>
           </div>

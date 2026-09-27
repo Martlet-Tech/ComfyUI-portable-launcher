@@ -1195,3 +1195,16 @@ input:focus-visible { outline: none; }
 }
 
 
+
+.update-patch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 12px;
+}
+.update-patch-actions { display: flex; gap: 8px; }
+.update-patch-status { font-size: 12px; color: var(--text-2); }
+.update-patch-status.patch-on { color: var(--ok); }
+.update-patch-status.patch-off { color: var(--text-3); }
+.update-patch-status.patch-missing { color: var(--danger); }
