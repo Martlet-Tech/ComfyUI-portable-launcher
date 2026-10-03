@@ -106,12 +106,14 @@ struct InstanceLogPayload {
     instance_id: String,
     pid: u32,
     line: String,
+    cr: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct UpdateLogPayload {
     instance_id: String,
     line: String,
+    cr: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -292,24 +294,47 @@ async fn check_port(port: u16) -> Result<bool, String> {
 fn spawn_log_reader<R, F>(reader: R, emit: F)
 where
     R: std::io::BufRead + Send + 'static,
-    F: Fn(String) + Send + 'static,
+    F: Fn(String, bool) + Send + 'static,
 {
     std::thread::spawn(move || {
         let mut reader = reader;
-        let mut buf = Vec::with_capacity(4096);
+        let mut line: Vec<u8> = Vec::with_capacity(1024);
         loop {
-            buf.clear();
-            match reader.read_until(b'\n', &mut buf) {
-                Ok(0) => break,
-                Ok(_) => {
-                    let decoded = String::from_utf8_lossy(&buf);
-                    let line = decoded.trim_end_matches(|c| c == '\r' || c == '\n');
-                    emit(line.to_string());
+            match reader.fill_buf() {
+                Ok(chunk) if chunk.is_empty() => break,
+                Ok(chunk) => {
+                    let len = chunk.len();
+                    let chunk = chunk.to_vec();
+                    reader.consume(len);
+                    for byte in chunk {
+                        if byte == b'\n' || byte == b'\r' {
+                            let text = String::from_utf8_lossy(&line).to_string();
+                            line.clear();
+                            emit(text, byte == b'\r');
+                        } else {
+                            line.push(byte);
+                        }
+                    }
                 }
                 Err(_) => break,
             }
         }
+        if !line.is_empty() {
+            emit(String::from_utf8_lossy(&line).to_string(), false);
+        }
     });
+}
+
+fn append_process_log(log: &Arc<Mutex<String>>, line: &str, cr: bool) {
+    let mut buf = log.lock().unwrap();
+    if cr {
+        let nl = buf.rfind('\n').map(|i| i + 1).unwrap_or(0);
+        buf.truncate(nl);
+    }
+    buf.push_str(line);
+    if !cr {
+        buf.push('\n');
+    }
 }
 
 #[tauri::command]
@@ -335,7 +360,7 @@ async fn launch_instance(
         return Err("ComfyUI/main.py not found".to_string());
     }
 
-    let mut args = vec!["-s".to_string(), main_py.to_string_lossy().to_string()];
+    let mut args = vec!["-u".to_string(), "-s".to_string(), main_py.to_string_lossy().to_string()];
     args.push("--windows-standalone-build".to_string());
 
     match mode.as_str() {
@@ -388,13 +413,13 @@ async fn launch_instance(
         let app_clone = app.clone();
         let log_clone = log.clone();
         let iid = instance_id.clone();
-        spawn_log_reader(std::io::BufReader::new(stdout), move |line| {
-            log_clone.lock().unwrap().push_str(&line);
-            log_clone.lock().unwrap().push_str("\n");
+        spawn_log_reader(std::io::BufReader::new(stdout), move |line, cr| {
+            append_process_log(&log_clone, &line, cr);
             let _ = app_clone.emit("instance-log", InstanceLogPayload {
                 instance_id: iid.clone(),
                 pid,
                 line,
+                cr,
             });
         });
     }
@@ -403,13 +428,13 @@ async fn launch_instance(
         let app_clone = app.clone();
         let log_clone = log.clone();
         let iid = instance_id.clone();
-        spawn_log_reader(std::io::BufReader::new(stderr), move |line| {
-            log_clone.lock().unwrap().push_str(&line);
-            log_clone.lock().unwrap().push_str("\n");
+        spawn_log_reader(std::io::BufReader::new(stderr), move |line, cr| {
+            append_process_log(&log_clone, &line, cr);
             let _ = app_clone.emit("instance-log", InstanceLogPayload {
                 instance_id: iid.clone(),
                 pid,
-                line: line.to_string(),
+                line,
+                cr,
             });
         });
     }
@@ -696,6 +721,7 @@ async fn run_update(
     }
 
     let mut args = vec![
+        "-u".to_string(),
         "-s".to_string(),
         update_py.to_string_lossy().to_string(),
         comfy_dir.to_string_lossy().to_string(),
@@ -723,10 +749,11 @@ async fn run_update(
     if let Some(stdout) = child.stdout.take() {
         let app_clone = app.clone();
         let iid = instance_id.clone();
-        spawn_log_reader(std::io::BufReader::new(stdout), move |line| {
+        spawn_log_reader(std::io::BufReader::new(stdout), move |line, cr| {
             let _ = app_clone.emit("update-log", UpdateLogPayload {
                 instance_id: iid.clone(),
                 line,
+                cr,
             });
         });
     }
@@ -734,10 +761,11 @@ async fn run_update(
     if let Some(stderr) = child.stderr.take() {
         let app_clone = app.clone();
         let iid = instance_id.clone();
-        spawn_log_reader(std::io::BufReader::new(stderr), move |line| {
+        spawn_log_reader(std::io::BufReader::new(stderr), move |line, cr| {
             let _ = app_clone.emit("update-log", UpdateLogPayload {
                 instance_id: iid.clone(),
-                line: line.to_string(),
+                line,
+                cr,
             });
         });
     }
@@ -753,9 +781,11 @@ async fn run_update(
             let _ = app.emit("update-log", UpdateLogPayload {
                 instance_id: instance_id.clone(),
                 line: "--- pip install ---".to_string(),
+                cr: false,
             });
 
             let pip_args = vec![
+                "-u".to_string(),
                 "-s".to_string(),
                 "-m".to_string(),
                 "pip".to_string(),
@@ -782,20 +812,22 @@ async fn run_update(
                 if let Some(ps) = pip_child.stdout.take() {
                     let app_clone = app.clone();
                     let iid = instance_id.clone();
-                    spawn_log_reader(std::io::BufReader::new(ps), move |line| {
+                    spawn_log_reader(std::io::BufReader::new(ps), move |line, cr| {
                         let _ = app_clone.emit("update-log", UpdateLogPayload {
                             instance_id: iid.clone(),
                             line,
+                            cr,
                         });
                     });
                 }
                 if let Some(ps) = pip_child.stderr.take() {
                     let app_clone = app.clone();
                     let iid = instance_id.clone();
-                    spawn_log_reader(std::io::BufReader::new(ps), move |line| {
+                    spawn_log_reader(std::io::BufReader::new(ps), move |line, cr| {
                         let _ = app_clone.emit("update-log", UpdateLogPayload {
                             instance_id: iid.clone(),
-                            line: line.to_string(),
+                            line,
+                            cr,
                         });
                     });
                 }
@@ -1176,6 +1208,7 @@ fn handle_tray_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
                     let main_py =
                         std::path::Path::new(&inst.path).join("ComfyUI\\main.py");
                     let args = vec![
+                        "-u".to_string(),
                         "-s".to_string(),
                         main_py.to_string_lossy().to_string(),
                         "--windows-standalone-build".to_string(),
@@ -1205,13 +1238,13 @@ fn handle_tray_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
                         let app_clone = app.clone();
                         let log_clone = log.clone();
                         let iid = instance_id.clone();
-                        spawn_log_reader(std::io::BufReader::new(stdout), move |line| {
-                            log_clone.lock().unwrap().push_str(&line);
-                            log_clone.lock().unwrap().push_str("\n");
+                        spawn_log_reader(std::io::BufReader::new(stdout), move |line, cr| {
+                            append_process_log(&log_clone, &line, cr);
                             let _ = app_clone.emit("instance-log", InstanceLogPayload {
                                 instance_id: iid.clone(),
                                 pid,
                                 line,
+                                cr,
                             });
                         });
                     }
@@ -1220,13 +1253,13 @@ fn handle_tray_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
                         let app_clone = app.clone();
                         let log_clone = log.clone();
                         let iid = instance_id.clone();
-                        spawn_log_reader(std::io::BufReader::new(stderr), move |line| {
-                            log_clone.lock().unwrap().push_str(&line);
-                            log_clone.lock().unwrap().push_str("\n");
+                        spawn_log_reader(std::io::BufReader::new(stderr), move |line, cr| {
+                            append_process_log(&log_clone, &line, cr);
                             let _ = app_clone.emit("instance-log", InstanceLogPayload {
                                 instance_id: iid.clone(),
                                 pid,
-                                line: line.to_string(),
+                                line,
+                                cr,
                             });
                         });
                     }

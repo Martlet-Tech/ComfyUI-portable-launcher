@@ -949,27 +949,22 @@ async function resolveProxy() {
   };
 }
 
-function appendLog(st, text) {
-  const parts = text.replace(/\r\n/g, '\n').split('\r');
-  for (let i = 0; i < parts.length; i++) {
-    const seg = parts[i];
+function appendLog(st, text, overwrite = false) {
+  if (overwrite) {
     const cur = st.log || '';
-    const curLen = cur.length - (cur.lastIndexOf('\n') + 1);
-    if (i > 0 && curLen > 0) {
-      const nl = cur.lastIndexOf('\n');
-      st.log = cur.slice(0, nl + 1) + seg;
-      const html = st.logHtml || '';
-      const hnl = html.lastIndexOf('\n');
-      st.logHtml = html.slice(0, hnl + 1);
-      st.logRenderedLen = Math.min(st.logRenderedLen || 0, st.logHtml.length);
-      st.logDropPending = true;
-    } else {
-      st.log = cur + seg;
-    }
-    const res = ansiLog.parse(seg, st.ansiState || ansiLog.defaultState);
-    st.ansiState = res.state;
-    st.logHtml = (st.logHtml || '') + res.html;
+    const nl = cur.lastIndexOf('\n');
+    st.log = cur.slice(0, nl + 1) + text;
+    const html = st.logHtml || '';
+    const hnl = html.lastIndexOf('\n');
+    st.logHtml = html.slice(0, hnl + 1);
+    st.logRenderedLen = Math.min(st.logRenderedLen || 0, st.logHtml.length);
+    st.logDropPending = true;
+  } else {
+    st.log = (st.log || '') + text;
   }
+  const res = ansiLog.parse(text, st.ansiState || ansiLog.defaultState);
+  st.ansiState = res.state;
+  st.logHtml = (st.logHtml || '') + res.html;
 }
 
 function resetLog(st) {
@@ -1143,19 +1138,23 @@ async function init() {
   document.getElementById('configPathDisplay').textContent = configPath;
 
   await listen('instance-log', (event) => {
-    const { instance_id, line } = event.payload;
+    const { instance_id, line, cr } = event.payload;
     const st = state.instanceStates[instance_id];
     if (!st) return;
-    appendLog(st, line + '\n');
+    if (cr === true) appendLog(st, line, true);
+    else if (line === '') appendLog(st, '\n');
+    else appendLog(st, line + '\n');
     if (st.status === 'starting') armWatchdog(instance_id);
     syncConsoleLog(instance_id);
   });
 
   await listen('update-log', (event) => {
-    const { instance_id, line } = event.payload;
+    const { instance_id, line, cr } = event.payload;
     const st = state.instanceStates[instance_id];
     if (!st) return;
-    appendLog(st, line + '\n');
+    if (cr === true) appendLog(st, line, true);
+    else if (line === '') appendLog(st, '\n');
+    else appendLog(st, line + '\n');
     syncConsoleLog(instance_id);
   });
 
