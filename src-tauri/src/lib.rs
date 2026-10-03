@@ -409,7 +409,7 @@ async fn launch_instance(
             let _ = app_clone.emit("instance-log", InstanceLogPayload {
                 instance_id: iid.clone(),
                 pid,
-                line: format!("[stderr] {}", line),
+                line: line.to_string(),
             });
         });
     }
@@ -737,7 +737,7 @@ async fn run_update(
         spawn_log_reader(std::io::BufReader::new(stderr), move |line| {
             let _ = app_clone.emit("update-log", UpdateLogPayload {
                 instance_id: iid.clone(),
-                line: format!("[stderr] {}", line),
+                line: line.to_string(),
             });
         });
     }
@@ -795,7 +795,7 @@ async fn run_update(
                     spawn_log_reader(std::io::BufReader::new(ps), move |line| {
                         let _ = app_clone.emit("update-log", UpdateLogPayload {
                             instance_id: iid.clone(),
-                            line: format!("[stderr] {}", line),
+                            line: line.to_string(),
                         });
                     });
                 }
@@ -1226,7 +1226,7 @@ fn handle_tray_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
                             let _ = app_clone.emit("instance-log", InstanceLogPayload {
                                 instance_id: iid.clone(),
                                 pid,
-                                line: format!("[stderr] {}", line),
+                                line: line.to_string(),
                             });
                         });
                     }
