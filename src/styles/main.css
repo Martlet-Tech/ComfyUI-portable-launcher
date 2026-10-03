@@ -90,6 +90,20 @@ body {
   color: var(--text-1);
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+input,
+textarea {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.console-body,
+.log-content {
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 body::before {
