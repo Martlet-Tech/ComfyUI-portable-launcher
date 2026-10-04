@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
 import ansiLog from './ansiLog.js';
+import progressMonitor from './progressMonitor.js';
 
 const LAUNCH_MODES = ['gpu', 'cpu', 'gpu_fastfp16'];
 const MODE_LABELS = { gpu: 'GPU', cpu: 'CPU', gpu_fastfp16: 'GPU Fast FP16' };
@@ -1144,6 +1145,7 @@ async function init() {
     if (cr === true) appendLog(st, line, true);
     else if (line === '') appendLog(st, '\n');
     else appendLog(st, line + '\n');
+    progressMonitor.feed(line);
     if (st.status === 'starting') armWatchdog(instance_id);
     syncConsoleLog(instance_id);
   });
@@ -1205,6 +1207,7 @@ function renderAll() {
     detailEl.classList.add('hidden');
   }
   topbar.setRemoveEnabled(state.selectedId != null);
+  progressMonitor.sync(state);
 }
 
 async function saveConfig() {

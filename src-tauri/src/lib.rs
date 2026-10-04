@@ -315,6 +315,11 @@ where
                             line.push(byte);
                         }
                     }
+                    if !line.is_empty() {
+                        let text = String::from_utf8_lossy(&line).to_string();
+                        line.clear();
+                        emit(text, true);
+                    }
                 }
                 Err(_) => break,
             }
@@ -837,6 +842,56 @@ async fn run_update(
     }
 
     Ok(())
+}
+
+fn http_get_local(port: u16, target: &str) -> Result<String, String> {
+    use std::io::{Read, Write};
+    let mut stream = std::net::TcpStream::connect(("127.0.0.1", port))
+        .map_err(|e| format!("connect: {}", e))?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .map_err(|e| e.to_string())?;
+    let req = format!(
+        "GET {} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\nAccept: application/json\r\n\r\n",
+        target, port
+    );
+    stream.write_all(req.as_bytes()).map_err(|e| e.to_string())?;
+    let mut raw = Vec::new();
+    stream.read_to_end(&mut raw).map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&raw).to_string();
+    let (head, body) = text
+        .split_once("\r\n\r\n")
+        .ok_or_else(|| "bad http response".to_string())?;
+    if !head.split("\r\n").next().unwrap_or("").contains(" 200 ") {
+        return Err(format!("http status: {}", head.split("\r\n").next().unwrap_or("")));
+    }
+    if head.to_lowercase().contains("transfer-encoding: chunked") {
+        let mut out = Vec::new();
+        let mut rest = body;
+        loop {
+            let line_end = rest.find("\r\n").ok_or("bad chunk")?;
+            let size = usize::from_str_radix(rest[..line_end].trim(), 16)
+                .map_err(|_| "bad chunk size".to_string())?;
+            if size == 0 {
+                break;
+            }
+            let start = line_end + 2;
+            if rest.len() < start + size {
+                return Err("truncated chunk".to_string());
+            }
+            out.extend_from_slice(&rest[start..start + size].as_bytes());
+            rest = &rest[(start + size + 2).min(rest.len())..];
+        }
+        return Ok(String::from_utf8_lossy(&out).to_string());
+    }
+    Ok(body.to_string())
+}
+
+#[tauri::command]
+async fn get_queue_snapshot(port: u16) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || http_get_local(port, "/queue"))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 fn parse_proxy_url(url: &str) -> Option<ResolvedProxy> {
@@ -1384,6 +1439,7 @@ pub fn run() {
             stop_instance,
             check_port,
             check_paths,
+            get_queue_snapshot,
             read_instance_log,
             run_update,
             get_update_patch_status,
