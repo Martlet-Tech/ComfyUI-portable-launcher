@@ -13,6 +13,7 @@ const progressMonitor = (() => {
   let active = false;
   let pending = 0;
   let stepPercent = null;
+  let sawPercent = false;
 
   function paint() {
     let title = BASE_TITLE;
@@ -23,9 +24,11 @@ const progressMonitor = (() => {
         const queued = pending > 0 ? ` +${pending}` : '';
         title = `[${stepPercent}%]${queued} 生图中`;
         bar = stepPercent;
-      } else {
+      } else if (sawPercent) {
         title = '生图中';
         indeterminate = true;
+      } else {
+        title = '生图中';
       }
     } else if (pending > 0) {
       title = `[队列 ${pending}] 等待中`;
@@ -45,6 +48,7 @@ const progressMonitor = (() => {
     active = false;
     pending = 0;
     stepPercent = null;
+    sawPercent = false;
   }
 
   async function poll() {
@@ -60,6 +64,7 @@ const progressMonitor = (() => {
       } else {
         active = false;
         stepPercent = null;
+        sawPercent = false;
       }
       paint();
     } catch (e) {
@@ -76,6 +81,7 @@ const progressMonitor = (() => {
       if (pct >= 0 && pct <= 100) {
         active = true;
         stepPercent = pct;
+        sawPercent = true;
         paint();
       }
       return;
