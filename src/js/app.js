@@ -295,14 +295,13 @@ function createInstanceDetail(container, handlers) {
       if (currentInstance) handlers.onUpdate(currentInstance.id, btn.dataset.type);
     });
   });
-  const patchStatusEl = document.getElementById('updatePatchStatus');
-  const patchHintEl = document.getElementById('updatePatchHint');
+  const patchBadge = document.getElementById('patchRestoreBtn');
   const patchInjectBtn = document.getElementById('patchInjectBtn');
-  const patchRestoreBtn = document.getElementById('patchRestoreBtn');
+  const patchStateText = document.getElementById('patchStateText');
   patchInjectBtn.addEventListener('click', () => {
     if (currentInstance) handlers.onPatchInject(currentInstance.id);
   });
-  patchRestoreBtn.addEventListener('click', () => {
+  patchBadge.addEventListener('click', () => {
     if (currentInstance) handlers.onPatchRestore(currentInstance.id);
   });
   aliasInput.addEventListener('change', () => {
@@ -531,29 +530,24 @@ function createInstanceDetail(container, handlers) {
   }
 
   function setPatchStatus(status) {
-    if (!status || !status.script_exists) {
-      patchStatusEl.textContent = '未找到 update/update.py';
-      patchStatusEl.className = 'update-patch-status patch-missing';
-      patchInjectBtn.disabled = true;
-      patchRestoreBtn.disabled = true;
-      patchHintEl.textContent = status && status.script_exists ? '' : '该实例目录下没有更新脚本';
-      return;
-    }
-    patchStatusEl.className = 'update-patch-status ' + (status.patched ? 'patch-on' : 'patch-off');
-    patchStatusEl.textContent = status.patched
-      ? (status.backup_exists ? '已注入代理补丁' : '已注入代理补丁 (无备份)')
-      : (status.backup_exists ? '原版脚本 (存在备份)' : '未注入 (原版脚本)');
-    patchInjectBtn.disabled = status.patched;
-    patchRestoreBtn.disabled = !status.patched && !status.backup_exists;
-    patchHintEl.textContent = status.patched
-      ? '更新时 git 流量将走配置的网络代理'
-      : '更新脚本使用 pygit2, 不认环境变量代理; 注入后更新流量才会走代理';
+    const missing = !status || !status.script_exists;
+    patchBadge.disabled = false;
+    patchInjectBtn.disabled = false;
+    patchBadge.classList.toggle('hidden', missing || !status.patched);
+    patchInjectBtn.classList.toggle('hidden', missing || status.patched);
+    patchStateText.classList.toggle('hidden', !missing);
+    patchStateText.classList.toggle('patch-missing', missing);
+    if (missing) patchStateText.textContent = '未找到 update/update.py';
   }
 
   function setPatchBusy(busy) {
+    patchBadge.disabled = busy;
     patchInjectBtn.disabled = busy;
-    patchRestoreBtn.disabled = busy;
-    if (busy) patchStatusEl.textContent = '处理中...';
+    patchBadge.classList.toggle('hidden', busy);
+    patchInjectBtn.classList.toggle('hidden', busy);
+    patchStateText.classList.toggle('hidden', !busy);
+    patchStateText.classList.toggle('patch-missing', false);
+    if (busy) patchStateText.textContent = '处理中...';
   }
 
   return { render, setPathError, setPathsValid, setPatchStatus, setPatchBusy };

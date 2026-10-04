@@ -112,28 +112,30 @@
                 <h2 class="card-title">更新</h2>
               </div>
               <div class="card-body">
-                <div class="btn-row">
-                  <button class="btn btn-update" data-type="latest">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
-                    <span>最新版</span>
-                  </button>
-                  <button class="btn btn-update" data-type="stable">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l9 4.5v11L12 22l-9-4.5v-11L12 2z"/><polyline points="3 6.5 12 11 21 6.5"/><line x1="12" y1="11" x2="12" y2="22"/></svg>
-                    <span>稳定版</span>
-                  </button>
-                  <button class="btn btn-update" data-type="deps">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
-                    <span>依赖</span>
-                  </button>
-                </div>
-                <div class="update-patch-row">
-                  <span id="updatePatchStatus" class="update-patch-status">...</span>
-                  <span class="update-patch-actions">
-                    <button id="patchInjectBtn" class="btn btn-ghost btn-sm" title="备份原版脚本并注入代理补丁, 使更新流量走系统代理">注入代理补丁</button>
-                    <button id="patchRestoreBtn" class="btn btn-ghost btn-sm" title="从备份恢复原版 update.py">还原脚本</button>
+                <div class="update-row">
+                  <span id="updatePatchStatus" class="patch-indicator">
+                    <button id="patchRestoreBtn" class="patch-badge hidden" title="已注入代理补丁, 更新时 git 流量将走配置的网络代理; 点击还原原版脚本">
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+                      <span>已注入</span>
+                    </button>
+                    <button id="patchInjectBtn" class="btn btn-ghost btn-sm hidden" title="备份原版脚本并注入代理补丁, 使更新流量走系统代理">注入代理补丁</button>
+                    <span id="patchStateText" class="patch-state-text hidden"></span>
                   </span>
+                  <div class="btn-row">
+                    <button class="btn btn-update" data-type="latest">
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                      <span>最新版</span>
+                    </button>
+                    <button class="btn btn-update" data-type="stable">
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l9 4.5v11L12 22l-9-4.5v-11L12 2z"/><polyline points="3 6.5 12 11 21 6.5"/><line x1="12" y1="11" x2="12" y2="22"/></svg>
+                      <span>稳定版</span>
+                    </button>
+                    <button class="btn btn-update" data-type="deps">
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+                      <span>依赖</span>
+                    </button>
+                  </div>
                 </div>
-                <div id="updatePatchHint" class="proxy-hint"></div>
               </div>
             </section>
           </div>
