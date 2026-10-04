@@ -5,7 +5,8 @@ const BASE_TITLE = 'ComfyUI-portable-launcher';
 const POLL_MS = 1000;
 
 const progressMonitor = (() => {
-  const win = getCurrentWindow();
+  let win = null;
+  try { win = getCurrentWindow(); } catch (_) {}
   let key = null;
   let port = 0;
   let timer = null;
@@ -34,6 +35,7 @@ const progressMonitor = (() => {
       title = `[队列 ${pending}] 等待中`;
       indeterminate = true;
     }
+    if (!win) return;
     win.setTitle(title).catch(() => {});
     if (bar !== null) {
       win.setProgressBar({ status: 'normal', progress: bar }).catch(() => {});

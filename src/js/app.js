@@ -241,6 +241,7 @@ function createInstanceDetail(container, handlers) {
   const consoleHead = document.getElementById('consoleHead');
   const consoleBadge = document.getElementById('consoleBadge');
   const consoleToggle = document.getElementById('consoleToggle');
+  const consoleResizeHandle = document.getElementById('consoleResizeHandle');
 
   const pathDefs = [
     { key: 'output_directory', label: 'Output 目录' },
@@ -368,6 +369,37 @@ function createInstanceDetail(container, handlers) {
     renderConsole(st);
   });
 
+  let consoleResize = null;
+  consoleResizeHandle.addEventListener('pointerdown', (e) => {
+    const scroller = consoleScroller();
+    if (!scroller || !scroller.offsetHeight) return;
+    consoleResize = { y: e.clientY, h: scroller.offsetHeight };
+    consoleResizeHandle.classList.add('dragging');
+    e.preventDefault();
+  });
+  window.addEventListener('pointermove', (e) => {
+    if (!consoleResize) return;
+    const height = Math.min(
+      Math.max(Math.round(consoleResize.h - (e.clientY - consoleResize.y)), 96),
+      Math.round(window.innerHeight * 0.7),
+    );
+    state.consoleHeight = height;
+    consoleScroller().style.height = height + 'px';
+  });
+  const endConsoleResize = () => {
+    if (!consoleResize) return;
+    consoleResize = null;
+    consoleResizeHandle.classList.remove('dragging');
+    saveUiState();
+  };
+  window.addEventListener('pointerup', endConsoleResize);
+  window.addEventListener('pointercancel', endConsoleResize);
+  consoleResizeHandle.addEventListener('dblclick', () => {
+    state.consoleHeight = null;
+    consoleScroller().style.height = '';
+    saveUiState();
+  });
+
   function renderConsole(st) {
     const show = !!(st && (st.log || st.status === 'starting' || st.updating));
     consoleSection.classList.toggle('hidden', !show);
@@ -377,6 +409,7 @@ function createInstanceDetail(container, handlers) {
     consoleToggle.setAttribute('aria-expanded', String(!st.consoleCollapsed));
     consoleBadge.classList.toggle('hidden', !(st.consoleCollapsed && st.consoleUnread));
     if (st.consoleCollapsed) return;
+    consoleScroller().style.height = state.consoleHeight ? state.consoleHeight + 'px' : '';
     mountConsole(st, currentInstance.id);
     paintConsole(st);
   }
@@ -840,6 +873,7 @@ const state = {
   sidebarCollapsed: false,
   activeTab: 'launch',
   closeAction: 'ask',
+  consoleHeight: null,
   closePromptOpen: false,
 };
 
@@ -1112,6 +1146,7 @@ async function init() {
   state.sidebarCollapsed = ui.sidebar_collapsed === true;
   state.activeTab = ui.active_tab || 'launch';
   state.closeAction = ui.close_action || 'ask';
+  state.consoleHeight = Number(ui.console_height) || null;
   sidebar.setCollapsed(state.sidebarCollapsed);
   tabBar.activate(state.activeTab, false);
   settingsModal.setCloseAction(state.closeAction);
@@ -1215,6 +1250,7 @@ function saveUiState() {
   state.config.ui = {
     sidebar_collapsed: sidebar.isCollapsed(),
     active_tab: state.activeTab,
+    console_height: state.consoleHeight || null,
   };
   saveConfig();
 }
