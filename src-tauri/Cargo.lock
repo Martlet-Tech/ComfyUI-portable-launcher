@@ -340,7 +340,7 @@ dependencies = [
 
 [[package]]
 name = "comfyui-portable-launcher"
-version = "0.8.2"
+version = "0.8.4"
 dependencies = [
  "serde",
  "serde_json",
