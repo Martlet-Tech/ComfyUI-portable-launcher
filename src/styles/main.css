@@ -1163,6 +1163,26 @@ input:focus-visible { outline: none; }
 .proxy-test-result.test-fail { color: var(--danger); }
 .proxy-test-result.test-loading { color: var(--warn); }
 
+.mirror-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: 12px;
+  color: var(--text-2);
+  cursor: pointer;
+  user-select: none;
+}
+
+.mirror-toggle input {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.mirror-toggle:hover { color: var(--text-1); }
+
 .config-path { font-family: var(--font-mono); font-size: 11px; color: var(--text-2); word-break: break-all; }
 
 #statusBar {

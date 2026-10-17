@@ -69,6 +69,10 @@ fn default_tab() -> String {
     "launch".to_string()
 }
 
+fn default_true() -> bool {
+    true
+}
+
 fn default_close_action() -> String {
     "ask".to_string()
 }
@@ -79,6 +83,8 @@ pub struct AppConfig {
     pub proxy: Option<ProxyConfig>,
     #[serde(default)]
     pub ui: Option<UiConfig>,
+    #[serde(default = "default_true")]
+    pub pip_mirror: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -255,6 +261,7 @@ fn read_config() -> Result<AppConfig, String> {
             instances: Vec::new(),
             proxy: None,
             ui: None,
+            pip_mirror: true,
         });
     }
     let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
@@ -314,11 +321,6 @@ where
                         } else {
                             line.push(byte);
                         }
-                    }
-                    if !line.is_empty() {
-                        let text = String::from_utf8_lossy(&line).to_string();
-                        line.clear();
-                        emit(text, true);
                     }
                 }
                 Err(_) => break,
@@ -713,6 +715,7 @@ async fn run_update(
     path: String,
     update_type: String,
     proxy: Option<ResolvedProxy>,
+    pip_index_url: Option<String>,
 ) -> Result<(), String> {
     let python_exe = std::path::Path::new(&path).join("python_embeded\\python.exe");
     let update_py = std::path::Path::new(&path).join("update\\update.py");
@@ -789,7 +792,7 @@ async fn run_update(
                 cr: false,
             });
 
-            let pip_args = vec![
+            let base_args = vec![
                 "-u".to_string(),
                 "-s".to_string(),
                 "-m".to_string(),
@@ -802,18 +805,52 @@ async fn run_update(
                 "torchaudio".to_string(),
                 "--extra-index-url".to_string(),
                 "https://download.pytorch.org/whl/cu130".to_string(),
+                "--retries".to_string(),
+                "5".to_string(),
+                "--timeout".to_string(),
+                "60".to_string(),
             ];
+            if let Some(ref idx) = pip_index_url {
+                let _ = app.emit("update-log", UpdateLogPayload {
+                    instance_id: instance_id.clone(),
+                    line: format!("--- 镜像源: {} ---", idx),
+                    cr: false,
+                });
+            }
 
-            let mut pip_cmd = Command::new(python_exe);
-            pip_cmd.args(&pip_args);
-            pip_cmd.creation_flags(0x08000000);
-            pip_cmd.stdout(Stdio::piped());
-            pip_cmd.stderr(Stdio::piped());
-            pip_cmd.env("PYTHONIOENCODING", "utf-8");
-            pip_cmd.env("PYTHONUTF8", "1");
-            apply_proxy(&mut pip_cmd, &proxy);
-
-            if let Ok(mut pip_child) = pip_cmd.spawn() {
+            let mut pip_ok = false;
+            for attempt in 1..=2 {
+                let use_mirror = attempt == 1 && pip_index_url.is_some();
+                let mut pip_args = base_args.clone();
+                if use_mirror {
+                    pip_args.push("--index-url".to_string());
+                    pip_args.push(pip_index_url.clone().unwrap());
+                }
+                if attempt > 1 {
+                    let msg = if pip_index_url.is_some() {
+                        "--- 镜像源未命中, 回退官方源 ---"
+                    } else {
+                        "--- 依赖安装失败, 自动重试 ---"
+                    };
+                    let _ = app.emit("update-log", UpdateLogPayload {
+                        instance_id: instance_id.clone(),
+                        line: msg.to_string(),
+                        cr: false,
+                    });
+                }
+                let mut pip_cmd = Command::new(&python_exe);
+                pip_cmd.args(&pip_args);
+                pip_cmd.creation_flags(0x08000000);
+                pip_cmd.stdout(Stdio::piped());
+                pip_cmd.stderr(Stdio::piped());
+                pip_cmd.env("PYTHONIOENCODING", "utf-8");
+                pip_cmd.env("PYTHONUTF8", "1");
+                if !use_mirror {
+                    apply_proxy(&mut pip_cmd, &proxy);
+                }
+                let mut pip_child = pip_cmd
+                    .spawn()
+                    .map_err(|e| format!("Failed to run pip: {}", e))?;
                 if let Some(ps) = pip_child.stdout.take() {
                     let app_clone = app.clone();
                     let iid = instance_id.clone();
@@ -836,7 +873,14 @@ async fn run_update(
                         });
                     });
                 }
-                pip_child.wait().ok();
+                let status = pip_child.wait().map_err(|e| e.to_string())?;
+                if status.success() {
+                    pip_ok = true;
+                    break;
+                }
+            }
+            if !pip_ok {
+                return Err("依赖安装失败，详情请查看日志".to_string());
             }
         }
     }
@@ -1382,6 +1426,7 @@ pub fn run() {
                 instances: vec![],
                 proxy: None,
                 ui: None,
+                pip_mirror: true,
             };
             let menu = build_tray_menu(app.handle(), &empty)?;
             let mut tray = TrayIconBuilder::new().menu(&menu);

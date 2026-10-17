@@ -597,6 +597,8 @@ function createSettingsModal() {
   const testBtn = document.getElementById('testProxyBtn');
   const hintEl = document.getElementById('proxyHint');
   const resultEl = document.getElementById('proxyTestResult');
+  const mirrorToggle = document.getElementById('settingsPipMirror');
+  const mirrorHintEl = document.getElementById('pipMirrorHint');
 
   const DEFAULT_IP = '127.0.0.1';
   const DEFAULT_PORT = 7890;
@@ -629,6 +631,18 @@ function createSettingsModal() {
       ip: ipInput.value.trim() || null,
       port: portInput.value ? parseInt(portInput.value) : null,
     };
+    saveConfig();
+  }
+
+  function updateMirrorHint() {
+    mirrorHintEl.textContent = mirrorToggle.checked
+      ? '普通依赖走阿里云源直连；torch 三件套仍走官方 PyTorch 源；镜像未命中时自动回退官方源。'
+      : '普通依赖走官方 PyPI 源（国内网络可能不稳定）。';
+  }
+
+  function saveMirror() {
+    state.pipMirror = mirrorToggle.checked;
+    updateMirrorHint();
     saveConfig();
   }
 
@@ -666,6 +680,8 @@ function createSettingsModal() {
     saveProxy();
     updateTestBtn();
   });
+
+  mirrorToggle.addEventListener('change', saveMirror);
 
   testBtn.addEventListener('click', async () => {
     if (testing) return;
@@ -727,6 +743,11 @@ function createSettingsModal() {
     updateTestBtn();
   }
 
+  function setMirror(enabled) {
+    mirrorToggle.checked = enabled !== false;
+    updateMirrorHint();
+  }
+
   backdrop.addEventListener('click', close);
   closeBtn.addEventListener('click', close);
 
@@ -751,7 +772,7 @@ function createSettingsModal() {
     await instanceService.setCloseAction(action);
   });
 
-  return { open, close, setProxy, setCloseAction };
+  return { open, close, setProxy, setCloseAction, setMirror };
 }
 
 function createLogModal() {
@@ -866,6 +887,7 @@ const state = {
   launchModes: {},
   launchTokens: {},
   proxy: { type: 'none', ip: null, port: null },
+  pipMirror: true,
   isMinimized: false,
   launchStartTime: null,
   accumulatedMs: 0,
@@ -1136,11 +1158,13 @@ function setupLogScrollControls() {
 async function init() {
   state.config = await configService.read();
   state.proxy = migrateProxy(state.config.proxy);
+  state.pipMirror = state.config.pip_mirror !== false;
   if (state.config.proxy && !state.config.proxy.type) {
     state.config.proxy = state.proxy;
     await configService.write(state.config);
   }
   settingsModal.setProxy(state.proxy);
+  settingsModal.setMirror(state.pipMirror);
 
   const ui = state.config.ui || {};
   state.sidebarCollapsed = ui.sidebar_collapsed === true;
@@ -1241,6 +1265,7 @@ function renderAll() {
 
 async function saveConfig() {
   state.config.proxy = state.proxy;
+  state.config.pip_mirror = state.pipMirror;
   await configService.write(state.config);
   await instanceService.rebuildTrayMenu();
 }
@@ -1482,6 +1507,7 @@ async function handleUpdate(id, type) {
   resetLog(st);
   renderAll();
   const proxy = await resolveProxy();
+  const pipIndexUrl = state.pipMirror ? 'https://mirrors.aliyun.com/pypi/simple' : null;
   if (proxy) {
     try {
       const ps = await instanceService.getUpdatePatchStatus({ path: inst.path });
@@ -1499,6 +1525,7 @@ async function handleUpdate(id, type) {
       path: inst.path,
       updateType: type,
       proxy,
+      pipIndexUrl,
     });
     appendLog(st, '✓ 更新完成\n');
   } catch (err) {
